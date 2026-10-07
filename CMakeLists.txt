@@ -141,7 +141,7 @@ endif()
 
 ecbuild_add_option(
     FEATURE LOKI
-    DEFAULT ON
+    DEFAULT OFF
     DESCRIPTION "Use Loki source-to-source processing"
     REQUIRED_PACKAGES "loki"
 )

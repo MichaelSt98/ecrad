@@ -77,12 +77,18 @@ ecbuild_add_library(
         "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
         "$<BUILD_INTERFACE:${CMAKE_Fortran_MODULE_DIRECTORY}>"
         "$<INSTALL_INTERFACE:${ecrad_${PREC}_INSTALL_INCLUDEDIR}>"
+    # TODO: correct definitions?
+    DEFINITIONS
+      $<${HAVE_FIELD_API}:HAVE_FIELD_API>
+      $<${HAVE_LOKI}:HAVE_LOKI>
+      $<${HAVE_ACC}:HAVE_ACC>
     PRIVATE_LIBS
         ecrad_base.${PREC}
         ecrad_ifsaux.${PREC}
         ecrad_utilities.${PREC}
         ifsrrtm.${PREC}
         $<${HAVE_OMP}:OpenMP::OpenMP_Fortran>
+        $<${HAVE_ACC}:ecrad_openacc>
 )
 
 add_library( ecrad::ecrad.${PREC} ALIAS ecrad.${PREC} )

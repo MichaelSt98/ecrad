@@ -119,6 +119,7 @@ contains
   !---------------------------------------------------------------------
   ! Calculate approximate saturation with respect to liquid
   subroutine calc_saturation_wrt_liquid(this,istartcol,iendcol)
+  !$loki routine vector
 
     use yomhook,  only : lhook, dr_hook, jphook
 
@@ -167,6 +168,7 @@ contains
   ! Calculate the dry mass of each layer, neglecting humidity effects.
   ! The first version is for all columns.
   subroutine get_layer_mass(this,istartcol,iendcol,layer_mass)
+  !$loki routine vector
 
     use yomhook,              only : lhook, dr_hook, jphook
     use radiation_constants,  only : AccelDueToGravity

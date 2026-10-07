@@ -243,6 +243,16 @@ contains
     use radiation_general_cloud_optics, only : general_cloud_optics
     use radiation_aerosol_optics, only : add_aerosol_optics
 
+    !$loki routine target(gas_optics_ecckd) vector
+    !$loki routine target(crop_cloud_fraction) vector
+    !$loki routine target(general_cloud_optics) vector
+    !$loki routine target(cloud_optics) vector
+    !$loki routine target(add_aerosol_optics) vector
+    !$loki routine target(solver_tripleclouds_lw) vector
+    !$loki routine target(solver_tripleclouds_sw) vector
+    !$loki routine target(calc_surface_spectral) vector
+    !$loki routine target(calc_toa_spectral) vector
+
     ! Inputs
     integer, intent(in) :: ncol               ! number of columns
     integer, intent(in) :: nlev               ! number of model levels
