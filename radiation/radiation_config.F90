@@ -2344,25 +2344,29 @@ contains
     call this%gas_optics_lw%delete_device()
     call this%gas_optics_sw%delete_device()
 
-    !$ACC EXIT DATA DELETE(this%cloud_optics)
     call this%cloud_optics%delete_device()
+    !$ACC WAIT(1)
+    !$ACC EXIT DATA DELETE(this%cloud_optics)
 
     if (allocated(this%cloud_optics_sw)) then
-      !$ACC EXIT DATA DELETE(this%cloud_optics_sw)
       do jtype=1,this%n_cloud_types
         call this%cloud_optics_sw(jtype)%delete_device()
       end do
+      !$ACC WAIT(1)
+      !$ACC EXIT DATA DELETE(this%cloud_optics_sw)
     end if
 
     if (allocated(this%cloud_optics_lw)) then
-      !$ACC EXIT DATA DELETE(this%cloud_optics_lw)
       do jtype=1,this%n_cloud_types
         call this%cloud_optics_lw(jtype)%delete_device()
       end do
+      !$ACC WAIT(1)
+      !$ACC EXIT DATA DELETE(this%cloud_optics_lw)
     end if
 
-    !$ACC EXIT DATA DELETE(this%aerosol_optics)
     call this%aerosol_optics%delete_device()
+    !$ACC WAIT(1)
+    !$ACC EXIT DATA DELETE(this%aerosol_optics)
 
     ! !$ACC EXIT DATA DELETE(this%pdf_sampler) FIXME: not neccessary for tc
     ! call this%pdf_sampler%delete_device()
