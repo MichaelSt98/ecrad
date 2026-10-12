@@ -99,6 +99,7 @@ REAL(KIND=JPRB)   ,INTENT(INOUT) :: PINCSOL(KIDIA:KFDIA,JPGPT) ! Incoming solar 
 !     ------------------------------------------------------------------
 
 INTEGER(KIND=JPIM) :: IB1, IB2, IBM, IGT, IW(KIDIA:KFDIA), JB, JG, JK, JL, ICOUNT
+INTEGER(KIND=JPIM) :: IWOFFSET
 
 !-- Output of SRTM_TAUMOLn routines
 REAL(KIND=JPRB) :: ZTAUG(KIDIA:KFDIA,KLEV,16) ! Absorption optical depth
@@ -148,6 +149,8 @@ ENDDO
 !$ACC END PARALLEL LOOP
 
 IF (ICOUNT/=0) THEN
+
+  IWOFFSET=0
 
   DO JB = IB1, IB2
     IBM = JB-15
@@ -299,6 +302,30 @@ IF (ICOUNT/=0) THEN
 
     ENDIF
     
+#ifdef _OPENACC
+    ! Every sunlit column has the same cumulative spectral offset. Keeping
+    ! it on the host removes the IW dependency between successive g-points.
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) FIRSTPRIVATE(IWOFFSET)
+    DO JG=1,IGT
+      DO JL=KIDIA,KFDIA
+        IF (PRMU0(JL) > 0.0_JPRB) THEN
+          PINCSOL(JL,IWOFFSET+JG)=ZSFLXZEN(JL,JG)
+        ENDIF
+      ENDDO
+    ENDDO
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) FIRSTPRIVATE(IWOFFSET)
+    DO JG=1,IGT
+      DO JK=1,KLEV
+        DO JL=KIDIA,KFDIA
+          IF (PRMU0(JL) > 0.0_JPRB) THEN
+            POD(JL,JK,IWOFFSET+JG)=ZTAUR(JL,JK,JG)+ZTAUG(JL,JK,JG)
+            PSSA(JL,JK,IWOFFSET+JG)=ZTAUR(JL,JK,JG)/POD(JL,JK,IWOFFSET+JG)
+          ENDIF
+        ENDDO
+      ENDDO
+    ENDDO
+    IWOFFSET=IWOFFSET+IGT
+#else
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
     !$ACC LOOP SEQ
     DO JG=1,IGT
@@ -326,6 +353,7 @@ IF (ICOUNT/=0) THEN
 
     ENDDO   !-- end loop on JG (g point)
     !$ACC END PARALLEL
+#endif
 
   ENDDO     !-- end loop on JB (band)
 
