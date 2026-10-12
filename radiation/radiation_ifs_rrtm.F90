@@ -759,7 +759,11 @@ contains
          &   planck_hl
 
     ! Planck function values per band
+#ifdef _OPENACC
+    real(jprb), dimension(istartcol:iendcol,config%n_bands_lw,nlev+1) :: planck_store
+#else
     real(jprb), dimension(istartcol:iendcol,nlev+1, config%n_bands_lw) :: planck_store
+#endif
 
     ! Look-up table variables for Planck function
     real(jprb), dimension(istartcol:iendcol,nlev+1) :: frac
@@ -772,6 +776,7 @@ contains
     real(jprb) :: ZFLUXFAC
 
     integer :: jlev, jgreorder, jg, ig, iband, jband, jcol, ilevoffset
+    integer :: ng_lw, nband_lw
 
     real(jphook) :: hook_handle
 
@@ -787,6 +792,60 @@ contains
     ! Work out interpolations: for each half level, the index of the
     ! lowest interpolation bound, and the fraction into interpolation
     ! interval
+#ifdef _OPENACC
+    ! Independent interpolation/output stages avoid serial level/g-point
+    ! loops inside a column-wide kernel. Preserve the CPU solver ordering below.
+    ng_lw = config%n_g_lw
+    nband_lw = config%n_bands_lw
+    !$ACC DATA CREATE(planck_store, frac, ind) ASYNC(1)
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(temperature)
+    do jlev = 1,nlev+1
+      do jcol = istartcol,iendcol
+        temperature = thermodynamics%temperature_hl(jcol,jlev+ilevoffset)
+        if (temperature < 339.0_jprb .and. temperature >= 160.0_jprb) then
+          ind(jcol,jlev) = int(temperature - 159.0_jprb)
+          frac(jcol,jlev) = temperature - int(temperature)
+        else if (temperature >= 339.0_jprb) then
+          ind(jcol,jlev) = 180
+          frac(jcol,jlev) = temperature - 339.0_jprb
+        else
+          ind(jcol,jlev) = 1
+          frac(jcol,jlev) = 0.0_jprb
+        end if
+      end do
+    end do
+
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) PRIVATE(factor)
+    do jlev = 1,nlev+1
+      do jband = 1,nband_lw
+        do jcol = istartcol,iendcol
+          factor = zfluxfac * delwave(jband)
+          planck_store(jcol,jband,jlev) = factor &
+               & * (totplnk(ind(jcol,jlev),jband) &
+               & + frac(jcol,jlev)*(totplnk(ind(jcol,jlev)+1,jband)-totplnk(ind(jcol,jlev),jband)))
+        end do
+      end do
+    end do
+
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(iband)
+    do jg = 1,ng_lw
+      do jcol = istartcol,iendcol
+        iband = config%i_band_from_g_lw(jg)
+        planck_hl(jg,1,jcol) = planck_store(jcol,iband,1) * PFRAC(jcol,jg,nlev)
+      end do
+    end do
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) PRIVATE(iband)
+    do jlev = 2,nlev+1
+      do jcol = istartcol,iendcol
+        do jg = 1,ng_lw
+          iband = config%i_band_from_g_lw(jg)
+          planck_hl(jg,jlev,jcol) = planck_store(jcol,iband,jlev) * PFRAC(jcol,jg,nlev+2-jlev)
+        end do
+      end do
+    end do
+    !$ACC END DATA
+    !$ACC WAIT(1)
+#else
     !$ACC PARALLEL DEFAULT(NONE) CREATE(planck_store, frac, ind) PRESENT(config, thermodynamics, PFRAC, &
     !$ACC   planck_hl) ASYNC(1)
     !$ACC LOOP SEQ
@@ -880,6 +939,7 @@ contains
 
     !$ACC WAIT
 
+#endif
     if (lhook) call dr_hook('radiation_ifs_rrtm:planck_function_atmos',1,hook_handle)
 
   end subroutine planck_function_atmos
