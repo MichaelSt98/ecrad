@@ -2,7 +2,8 @@
 SUBROUTINE RRTM_TAUMOL12 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,fac00,fac01,fac10,fac11,forfac,forfrac,indfor,jp,jt,jt1,oneminus,&
  & colh2o,colco2,laytrop,selffac,selffrac,indself,fracs, &
- & rat_h2oco2, rat_h2oco2_1)
+ & rat_h2oco2, rat_h2oco2_1, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 12:  1800-2080 cm-1 (low - H2O,CO2; high - nothing)
 
@@ -28,6 +29,7 @@ USE YOERRTRF, ONLY : CHI_MLS
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -89,8 +91,13 @@ REAL(KIND=JPRB) :: refrat_planck_a
     !$ACC             rat_h2oco2, rat_h2oco2_1, indfor, forfrac, forfac)
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -112,6 +119,10 @@ REAL(KIND=JPRB) :: refrat_planck_a
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -121,6 +132,8 @@ REAL(KIND=JPRB) :: refrat_planck_a
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
 !  ----------------------------------------------------------
@@ -134,7 +147,6 @@ REAL(KIND=JPRB) :: refrat_planck_a
       ! (in temperature) separately.
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(speccomb, speccomb1, speccomb_planck, ind0,ind1,inds,indf, js, js1, &
       !$ACC   jpl, fs, specmult, specparm, fs1, specmult1, specparm1, fpl, specmult_PLANCK, specparm_PLANCK, fac000, &

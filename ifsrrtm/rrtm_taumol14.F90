@@ -1,7 +1,8 @@
 !******************************************************************************
 SUBROUTINE RRTM_TAUMOL14 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,fac00,fac01,fac10,fac11,forfac,forfrac,indfor,jp,jt,jt1,&
- & colco2,laytrop,selffac,selffrac,indself,fracs)
+ & colco2,laytrop,selffac,selffrac,indself,fracs, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 14:  2250-2380 cm-1 (low - CO2; high - CO2)
 
@@ -26,6 +27,7 @@ USE YOERRTA14, ONLY : ABSA   ,ABSB   ,FRACREFA, FRACREFB,SELFREF,FORREF
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -62,8 +64,13 @@ REAL(KIND=JPRB) :: taufor,tauself
     !$ACC             indfor, forfac, forfrac)
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -85,6 +92,10 @@ REAL(KIND=JPRB) :: taufor,tauself
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -94,6 +105,8 @@ REAL(KIND=JPRB) :: taufor,tauself
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
 ! Compute the optical depth by interpolating in ln(pressure) and
@@ -101,7 +114,6 @@ REAL(KIND=JPRB) :: taufor,tauself
 ! and foreign continuum is interpolated (in temperature) separately.
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(ind0, ind1, inds, indf)
       do lay = 1, laytrop_min

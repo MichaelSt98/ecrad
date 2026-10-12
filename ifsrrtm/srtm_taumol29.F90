@@ -4,8 +4,8 @@ SUBROUTINE SRTM_TAUMOL29 &
  & K_JP      , K_JT     , K_JT1,&
  & P_COLH2O  , P_COLCO2 , P_COLMOL,&
  & K_LAYTROP , P_SELFFAC, P_SELFFRAC, K_INDSELF  , P_FORFAC, P_FORFRAC, K_INDFOR,&
- & P_SFLUXZEN, P_TAUG   , P_TAUR    , PRMU0   &
- & )
+ & P_SFLUXZEN, P_TAUG   , P_TAUR    , PRMU0, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     Written by Eli J. Mlawer, Atmospheric & Environmental Research.
 
@@ -27,6 +27,7 @@ USE YOESRTWN , ONLY : NSPA, NSPB
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 !-- Output
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA, KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -69,9 +70,18 @@ REAL(KIND=JPRB) ::  &
     !$ACC             P_SELFFRAC, K_INDSELF, P_FORFAC, P_FORFRAC, K_INDFOR, &
     !$ACC             P_SFLUXZEN, P_TAUG, P_TAUR, PRMU0)
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(k_laytrop(KIDIA:KFDIA))
     laytrop_max = MAXVAL(k_laytrop(KIDIA:KFDIA))
+    END IF
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -81,6 +91,8 @@ REAL(KIND=JPRB) ::  &
       laytrop_max = MAX(laytrop_max, k_laytrop(iplon))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
     i_nlayers = klev
@@ -91,7 +103,6 @@ REAL(KIND=JPRB) ::  &
     ENDDO
     !$ACC END PARALLEL
 
-    !$ACC WAIT
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
     !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(ind0, ind1, inds, indf, z_tauray)
     DO i_lay = 1, laytrop_min

@@ -2,7 +2,8 @@
 SUBROUTINE RRTM_TAUMOL13 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,fac00,fac01,fac10,fac11,forfac,forfrac,indfor,jp,jt,jt1,oneminus,&
  & colh2o,coln2o,colco2,colo3,coldry,laytrop,selffac,selffrac,indself,fracs, &
- & rat_h2on2o, rat_h2on2o_1,minorfrac,indminor)
+ & rat_h2on2o, rat_h2on2o_1,minorfrac,indminor, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 13:  2080-2250 cm-1 (low - H2O,N2O; high - nothing)
 
@@ -29,6 +30,7 @@ USE YOERRTRF, ONLY : CHI_MLS
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -112,8 +114,13 @@ REAL(KIND=JPRB)   :: colco(KIDIA:KFDIA,KLEV) !left =0 for now,not passed from rr
     !$ACC END PARALLEL
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -135,6 +142,10 @@ REAL(KIND=JPRB)   :: colco(KIDIA:KFDIA,KLEV) !left =0 for now,not passed from rr
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -144,6 +155,8 @@ REAL(KIND=JPRB)   :: colco(KIDIA:KFDIA,KLEV) !left =0 for now,not passed from rr
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
       ! P = 473.420 mb (Level 5)
@@ -161,7 +174,6 @@ REAL(KIND=JPRB)   :: colco(KIDIA:KFDIA,KLEV) !left =0 for now,not passed from rr
       ! (in temperature) separately.
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(speccomb, speccomb1, speccomb_planck, speccomb_mco2, speccomb_mco, &
       !$ACC   ind0, ind1, &

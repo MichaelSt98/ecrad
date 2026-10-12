@@ -2,7 +2,8 @@
 SUBROUTINE RRTM_TAUMOL3 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,FAC00,FAC01,FAC10,FAC11,FORFAC,FORFRAC,INDFOR,JP,JT,jt1,ONEMINUS,&
  & COLH2O,COLCO2,COLN2O,COLDRY,LAYTROP,SELFFAC,SELFFRAC,INDSELF,FRACS, &
- & RAT_H2OCO2, RAT_H2OCO2_1,MINORFRAC,INDMINOR)
+ & RAT_H2OCO2, RAT_H2OCO2_1,MINORFRAC,INDMINOR, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 3:  500-630 cm-1 (low - H2O,CO2; high - H2O,CO2)
 
@@ -31,6 +32,7 @@ USE YOERRTRF, ONLY : CHI_MLS
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -97,8 +99,13 @@ REAL(KIND=JPRB) :: TAUFOR,TAUSELF,N2OM1,N2OM2,ABSN2O,TAU_MAJOR(ng3),TAU_MAJOR1(n
     !$ACC             RAT_H2OCO2_1, INDFOR, FORFRAC, MINORFRAC, INDMINOR)
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -120,6 +127,10 @@ REAL(KIND=JPRB) :: TAUFOR,TAUSELF,N2OM1,N2OM2,ABSN2O,TAU_MAJOR(ng3),TAU_MAJOR1(n
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -129,6 +140,8 @@ REAL(KIND=JPRB) :: TAUFOR,TAUSELF,N2OM1,N2OM2,ABSN2O,TAU_MAJOR(ng3),TAU_MAJOR1(n
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
 !     Compute the optical depth by interpolating in ln(pressure),
@@ -153,7 +166,6 @@ REAL(KIND=JPRB) :: TAUFOR,TAUSELF,N2OM1,N2OM2,ABSN2O,TAU_MAJOR(ng3),TAU_MAJOR1(n
       REFRAT_M_B = CHI_MLS(1,13)/CHI_MLS(2,13)
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(speccomb, specparm, specmult, js, fs, speccomb1, specparm1, specmult1, &
       !$ACC   js1, fs1, speccomb_mn2o, specparm_mn2o, specmult_mn2o, jmn2o, fmn2o, chi_n2o, ratn2o, adjfac, adjcoln2o, &

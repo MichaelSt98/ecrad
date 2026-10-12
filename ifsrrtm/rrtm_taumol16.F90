@@ -2,7 +2,8 @@
 SUBROUTINE RRTM_TAUMOL16 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,fac00,fac01,fac10,fac11,forfac,forfrac,indfor,jp,jt,jt1,oneminus,&
  & colh2o,colch4,laytrop,selffac,selffrac,indself,fracs, &
- & rat_h2och4,rat_h2och4_1)
+ & rat_h2och4,rat_h2och4_1, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 16:  2600-3000 cm-1 (low - H2O,CH4; high - nothing)
 
@@ -29,6 +30,7 @@ USE YOERRTRF, ONLY : CHI_MLS
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -83,8 +85,13 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
     !$ACC             fracs, rat_h2och4, rat_h2och4_1, indfor, forfac, forfrac)
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -106,6 +113,10 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -115,6 +126,8 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
 
@@ -127,7 +140,6 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       ! (in temperature) separately.
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(ind0, ind1, inds, indf, js, js1, jpl, fac000, fac100, fac200, fac010, &
       !$ACC   fac110, fac210, fac001, fac101, fac201, fac011, fac111, fac211, p, p4, fk0, fk1, fk2, fs, specmult, &

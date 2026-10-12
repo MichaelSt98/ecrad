@@ -98,6 +98,7 @@ REAL(KIND=JPRB)   ,INTENT(INOUT) :: PINCSOL(KIDIA:KFDIA,JPGPT) ! Incoming solar 
 
 !     ------------------------------------------------------------------
 
+INTEGER(KIND=JPIM) :: BOUND_MIN, BOUND_MAX, BOUND_COL
 INTEGER(KIND=JPIM) :: IB1, IB2, IBM, IGT, IW(KIDIA:KFDIA), JB, JG, JK, JL, ICOUNT
 INTEGER(KIND=JPIM) :: IWOFFSET
 
@@ -150,6 +151,22 @@ ENDDO
 
 IF (ICOUNT/=0) THEN
 
+! Bounds are invariant across bands, but local to this invocation.
+#ifdef _OPENACC
+BOUND_MIN=HUGE(BOUND_MIN)
+BOUND_MAX=-HUGE(BOUND_MAX)
+!$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1) &
+!$ACC& REDUCTION(MIN:BOUND_MIN) REDUCTION(MAX:BOUND_MAX)
+DO BOUND_COL=KIDIA,KFDIA
+  BOUND_MIN=MIN(BOUND_MIN,KLAYTROP(BOUND_COL))
+  BOUND_MAX=MAX(BOUND_MAX,KLAYTROP(BOUND_COL))
+ENDDO
+!$ACC WAIT(1)
+#else
+BOUND_MIN=MINVAL(KLAYTROP)
+BOUND_MAX=MAXVAL(KLAYTROP)
+#endif
+
   IWOFFSET=0
 
   DO JB = IB1, IB2
@@ -166,8 +183,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT      , KJT1     , PONEMINUS,&
       &   PCOLH2O , PCOLCH4  , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC , PSELFFRAC, KINDSELF, PFORFAC  , PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG    , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG    , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 17) THEN
       CALL SRTM_TAUMOL17 &
@@ -176,8 +193,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 18) THEN
       CALL SRTM_TAUMOL18 &
@@ -186,8 +203,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLCH4 , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 19) THEN
       CALL SRTM_TAUMOL19 &
@@ -196,8 +213,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 20) THEN
       CALL SRTM_TAUMOL20 &
@@ -206,8 +223,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     ,&
       &   PCOLH2O , PCOLCH4 , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 21) THEN
       CALL SRTM_TAUMOL21 &
@@ -216,8 +233,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 22) THEN
       CALL SRTM_TAUMOL22 &
@@ -226,8 +243,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLMOL , PCOLO2   ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 23) THEN
       CALL SRTM_TAUMOL23 &
@@ -236,8 +253,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     ,&
       &   PCOLH2O , PCOLMOL ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 24) THEN
       CALL SRTM_TAUMOL24 &
@@ -246,8 +263,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     , PONEMINUS ,&
       &   PCOLH2O , PCOLMOL , PCOLO2   , PCOLO3 ,&
       &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 25) THEN
       !--- visible 16000-22650 cm-1   0.4415 - 0.6250 um
@@ -257,16 +274,16 @@ IF (ICOUNT/=0) THEN
       &   KJP      , KJT     , KJT1   ,&
       &   PCOLH2O  , PCOLMOL , PCOLO3 ,&
       &   KLAYTROP ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR   , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR   , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 26) THEN
       !--- UV-A 22650-29000 cm-1   0.3448 - 0.4415 um
       CALL SRTM_TAUMOL26 &
       & ( KIDIA   , KFDIA   , KLEV    ,&
       &   PCOLMOL ,KLAYTROP,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 27) THEN
       !--- UV-B 29000-38000 cm-1   0.2632 - 0.3448 um
@@ -276,8 +293,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1     ,&
       &   PCOLMOL , PCOLO3 ,&
       &   KLAYTROP ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 28) THEN
       !--- UV-C 38000-50000 cm-1   0.2000 - 0.2632 um
@@ -287,8 +304,8 @@ IF (ICOUNT/=0) THEN
       &   KJP     , KJT     , KJT1   , PONEMINUS ,&
       &   PCOLMOL , PCOLO2  , PCOLO3 ,&
       &   KLAYTROP ,&
-      &   ZSFLXZEN, ZTAUG   , ZTAUR  , PRMU0     &
-      & )  
+      &   ZSFLXZEN, ZTAUG   , ZTAUR  , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ELSEIF (JB == 29) THEN
       CALL SRTM_TAUMOL29 &
@@ -297,8 +314,8 @@ IF (ICOUNT/=0) THEN
       &   KJP      , KJT     , KJT1     ,&
       &   PCOLH2O  , PCOLCO2 , PCOLMOL  ,&
       &   KLAYTROP , PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
-      &   ZSFLXZEN , ZTAUG   , ZTAUR    , PRMU0     &
-      & )  
+      &   ZSFLXZEN , ZTAUG   , ZTAUR    , PRMU0, &
+ & KLAYER_MIN=BOUND_MIN,KLAYER_MAX=BOUND_MAX)
 
     ENDIF
     

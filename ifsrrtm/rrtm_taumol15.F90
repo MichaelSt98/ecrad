@@ -2,7 +2,8 @@
 SUBROUTINE RRTM_TAUMOL15 (KIDIA,KFDIA,KLEV,taug,&
  & P_TAUAERL,fac00,fac01,fac10,fac11,forfac,forfrac,indfor,jp,jt,jt1,oneminus,&
  & colh2o,colco2,coln2o,laytrop,selffac,selffrac,indself,fracs, &
- & rat_n2oco2, rat_n2oco2_1,minorfrac,indminor,scaleminor,colbrd)
+ & rat_n2oco2, rat_n2oco2_1,minorfrac,indminor,scaleminor,colbrd, &
+ & KLAYER_MIN,KLAYER_MAX)
 
 !     BAND 15:  2380-2600 cm-1 (low - N2O,CO2; high - nothing)
 
@@ -30,6 +31,7 @@ USE YOERRTRF, ONLY : CHI_MLS
 
 IMPLICIT NONE
 
+INTEGER(KIND=JPIM), OPTIONAL, INTENT(IN) :: KLAYER_MIN, KLAYER_MAX
 INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KFDIA
 INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
@@ -89,8 +91,13 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
     !$ACC             forfrac, minorfrac, indminor, scaleminor, colbrd)
 
 #ifndef _OPENACC
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = MINVAL(laytrop)
     laytrop_max = MAXVAL(laytrop)
+    END IF
 
     ixlow  = 0
     ixhigh = 0
@@ -112,6 +119,10 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       ixc(lay) = icl
     enddo
 #else
+    IF (PRESENT(KLAYER_MIN) .AND. PRESENT(KLAYER_MAX)) THEN
+      laytrop_min = KLAYER_MIN
+      laytrop_max = KLAYER_MAX
+    ELSE
     laytrop_min = HUGE(laytrop_min)
     laytrop_max = -HUGE(laytrop_max)
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
@@ -121,6 +132,8 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       laytrop_max = MAX(laytrop_max, laytrop(jc))
     end do
     !$ACC END PARALLEL
+    !$ACC WAIT(1)
+    END IF
 #endif
 
       ! Minor gas mapping level :
@@ -140,7 +153,6 @@ REAL(KIND=JPRB) :: fs, specmult, specparm,speccomb,  &
       ! (in temperature) separately.
 
       ! Lower atmosphere loop
-      !$ACC WAIT
       !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
       !$ACC LOOP GANG VECTOR COLLAPSE(2) &
       !$ACC   PRIVATE(ind0, ind1, inds, indf, indm, &
