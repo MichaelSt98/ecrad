@@ -26,6 +26,7 @@ module radiation_cloud_generator_acc
   implicit none
 
   !$omp declare target(cloud_generator_omp)
+  !$acc routine(cloud_generator_omp) seq
 
   public
 
@@ -537,6 +538,11 @@ contains
     logical    :: do_fill_od_scaling
     integer(kind=jpib) :: istate
 
+    ! Share the column/g-point algorithm across GPU directive backends.
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) &
+    !$ACC& PRIVATE(jlev, trigger, rand_top, rand_cloud, rand_inhom1, rand_inhom2, &
+    !$ACC& overlap_param_inhom, overhang, wfsd, wcdf, cover, itrigger, jcloud, &
+    !$ACC& n_layers_to_scale, ifsd, icdf, icol_begin, icol_end, do_fill_od_scaling, istate)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) &
     !$OMP& PRIVATE(jcol, jg, jlev, trigger, rand_top, rand_cloud, &
     !$OMP&         rand_inhom1, rand_inhom2, overlap_param_inhom, overhang, &

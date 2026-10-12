@@ -337,6 +337,9 @@ contains
     nteams = ((iendcol-istartcol+1)*ng + 127) / 128
 #endif
 
+    !$ACC ENTER DATA CREATE(flux_up, flux_dn, flux_up_clear, flux_dn_clear, &
+    !$ACC& is_clear_sky_layer, sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
+    !$ACC& pair_cloud_cover, cum_product, ibegin, iend) ASYNC(1)
     !$OMP TARGET ENTER DATA MAP(ALLOC: flux_up, flux_dn, flux_up_clear, flux_dn_clear, &
     !$OMP             is_clear_sky_layer, &
     !$OMP             sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
@@ -352,9 +355,12 @@ contains
     ! These allocations need to moved into a TEAMS PRIVATE clause, I think.
     !
 
+    !$ACC ENTER DATA CREATE(trans_clear, od_scaling, reflectance, transmittance, &
+    !$ACC& source_up, source_dn, tmp_work_source) ASYNC(1)
     !$OMP TARGET ENTER DATA MAP(ALLOC: trans_clear, od_scaling, &
     !$OMP   reflectance, transmittance, source_up, source_dn, tmp_work_source)
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jlev = 1,nfsd
       do jcol = 1,ncdf
@@ -363,16 +369,23 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jcol = istartcol,iendcol
       do jlev = 1, nlev
         frac(jlev, jcol) = cloud_fraction(jcol,jlev)
         frac_std(jlev, jcol) = cloud_fractional_std(jcol,jlev)
+#ifdef _OPENACC
+        ! One writer per layer; g-point lanes only read this bookkeeping.
+        is_clear_sky_layer(jlev,jcol) = frac(jlev,jcol) < cloud_fraction_threshold
+#else
         is_clear_sky_layer(jlev,jcol) = .true.
+#endif
       end do
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jcol = istartcol,iendcol
       do jlev = 1, nlev-1
@@ -381,6 +394,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(overlap_alpha)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(overlap_alpha)
     do jcol = istartcol,iendcol
       !---------------------------------------------------------------------
@@ -404,6 +418,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
     do jcol = istartcol,iendcol
       cum_cloud_cover(1, jcol) = frac(1,jcol)
@@ -424,6 +439,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
     do jcol = istartcol,iendcol
       if (cloud_cover_lw(jcol) >= cloud_fraction_threshold) then
@@ -446,6 +462,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
     do jcol = istartcol,iendcol
       do jlev = 1, nlev+1
@@ -479,6 +496,7 @@ contains
          &  inv_fsd_interval, sample_val, od_scaling, cloud_cover_lw, &
          &  ibegin, iend, cum_cloud_cover, pair_cloud_cover, 256)
 #else
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jg) FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
     !$OMP& THREAD_LIMIT(256)
     do jcol = istartcol,iendcol
@@ -502,6 +520,7 @@ contains
     ! Split the former combined kernel so the always-on clear-sky path is not
     ! compiled together with cloudy two-stream/adding (high VGPR/scratch).
     ! Revert: restore radiation_mcica_omp_lw.F90.pre_split_l435
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jg) &
 #ifdef __NVCOMPILER
     !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -530,6 +549,9 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC& PRESENT(ssa_cloud, g_cloud) &
+    !$ACC& PRIVATE(od_cloud_new, od_total, ssa_total, g_total, scat_od, jlev, i_cloud_top)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(od_cloud_new, od_total, ssa_total, g_total, scat_od, &
 #ifdef __NVCOMPILER
     !$OMP& jcol, jg, jlev, i_cloud_top) FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -552,7 +574,9 @@ contains
                 ! non-spectral cloud fraction.
                 do jlev = 1,nlev
                    if (frac(jlev,jcol) >= cloud_fraction_threshold) then
-                      is_clear_sky_layer(jlev,jcol) = .false.
+#ifndef _OPENACC
+                       is_clear_sky_layer(jlev,jcol) = .false.
+#endif
                       if (i_cloud_top > jlev) then
                          i_cloud_top = jlev
                       end if
@@ -562,7 +586,9 @@ contains
              do jlev = 1,nlev
                 ! Compute combined gas+aerosol+cloud optical properties
                 if (frac(jlev,jcol) >= cloud_fraction_threshold) then
-                   is_clear_sky_layer(jlev,jcol) = .false.
+#ifndef _OPENACC
+                    is_clear_sky_layer(jlev,jcol) = .false.
+#endif
                    ! Get index to the first cloudy layer from the top
                    if (i_cloud_top > jlev) then
                       i_cloud_top = jlev
@@ -661,6 +687,7 @@ contains
     ! Revert: restore radiation_mcica_omp_lw.F90.pre_deriv_twopass
     !
     if (do_lw_derivatives) then
+      !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up, sum_up_clr)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(jcol, jg, sum_up, sum_up_clr) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) THREAD_LIMIT(128)
@@ -684,6 +711,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up, jlev)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jg, jlev, sum_up) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -710,6 +738,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jlev, jg, sum_up) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) THREAD_LIMIT(128)
@@ -731,6 +760,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up_clr)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(jcol, jg, sum_up_clr) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) THREAD_LIMIT(128)
@@ -749,6 +779,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up, jlev)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jg, jlev, sum_up) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -770,6 +801,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_up, weight)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jlev, jg, sum_up, weight) &
 #ifdef __NVCOMPILER
       !$OMP& FIRSTPRIVATE(istartcol, iendcol, ng, nlev) THREAD_LIMIT(128)
@@ -794,6 +826,8 @@ contains
     endif
 
     ! Loop through columns
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) &
+    !$ACC& PRIVATE(total_cloud_cover, sum_up, sum_dn, sum_up_clr, sum_dn_clr)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) &
 #ifdef __NVCOMPILER
     !$OMP& PRIVATE(total_cloud_cover, sum_up, sum_dn, sum_up_clr, sum_dn_clr) THREAD_LIMIT(128)
@@ -835,6 +869,13 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC EXIT DATA DELETE(trans_clear, od_scaling, reflectance, transmittance, &
+    !$ACC& source_up, source_dn, tmp_work_source) ASYNC(1)
+    !$ACC EXIT DATA DELETE(flux_up, flux_dn, flux_up_clear, flux_dn_clear, &
+    !$ACC& is_clear_sky_layer, sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
+    !$ACC& pair_cloud_cover, cum_product, ibegin, iend) ASYNC(1)
+    ! Automatic host scratch must remain alive until queued work completes.
+    !$ACC WAIT(1)
     !$OMP TARGET EXIT DATA MAP(DELETE: trans_clear, od_scaling, &
     !$OMP   reflectance, transmittance, source_up, source_dn, tmp_work_source)
 

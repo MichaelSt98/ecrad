@@ -360,6 +360,8 @@ contains
     integer(kind=jpib), intent(inout) :: istate
     real(kind=jprb), intent(out)   :: randnum
 
+    !$ACC ROUTINE SEQ
+
     ! C++ minstd_rand algorithm
     istate = mod(IMinstdA * istate, IMinstdM)
     randnum = IMinstdScale * istate

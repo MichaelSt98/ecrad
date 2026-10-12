@@ -963,7 +963,7 @@ contains
     real(jprb), dimension(config%n_g_lw,nlev+1,istartcol:iendcol), intent(out) :: &
          &   planck_hl
 
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
     ! Planck function values per band
     real(jprb), dimension(istartcol:iendcol, config%n_bands_lw,nlev+1) :: planck_store
 
@@ -1008,8 +1008,10 @@ contains
     ! Work out interpolations: for each half level, the index of the
     ! lowest interpolation bound, and the fraction into interpolation
     ! interval
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
+    !$ACC ENTER DATA CREATE(planck_store, frac, ind) ASYNC(1)
     !$OMP TARGET ENTER DATA MAP(ALLOC:planck_store, frac, ind)
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(temperature)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(temperature)
     do jlev = 1,nlev+1
       do jcol = istartcol,iendcol
@@ -1033,6 +1035,7 @@ contains
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
     ! Calculate Planck functions per band
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) PRIVATE(factor)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(factor)
     do jlev = 1,nlev+1
       do jband = 1,nband_lw
@@ -1049,6 +1052,7 @@ contains
      ! G points have not been reordered
      ! Top-of-atmosphere half level - note that PFRAC is on model
      ! levels not half levels
+     !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(iband)
      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(iband)
      do jg = 1,ng_lw
         do jcol = istartcol,iendcol
@@ -1060,6 +1064,7 @@ contains
 
      ! Write planck_hl directly (solver layout). Previously this went
      ! through planck_tmp(jcol,jg,jlev) then a 7 ms transpose.
+     !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) PRIVATE(iband)
      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(iband)
      do jlev = 2,nlev+1
         do jcol = istartcol,iendcol
@@ -1070,6 +1075,8 @@ contains
         end do
      end do
      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+    !$ACC EXIT DATA DELETE(planck_store, frac, ind) ASYNC(1)
+    !$ACC WAIT(1)
     !$OMP TARGET EXIT DATA MAP(DELETE:planck_store, frac, ind)
 
 #else

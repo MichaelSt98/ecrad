@@ -25,6 +25,10 @@ module radiation_adding_ica_lw
   !$omp declare target(fast_adding_ica_lw_recompute_omp)
   !$omp declare target(calc_fluxes_no_scattering_lw_omp)
   !$omp declare target(calc_fluxes_no_scattering_lw_recompute_omp)
+  !$acc routine(fast_adding_ica_lw_omp) seq
+  !$acc routine(fast_adding_ica_lw_recompute_omp) seq
+  !$acc routine(calc_fluxes_no_scattering_lw_omp) seq
+  !$acc routine(calc_fluxes_no_scattering_lw_recompute_omp) seq
 contains
 
   !---------------------------------------------------------------------

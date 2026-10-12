@@ -58,6 +58,9 @@ contains
     use radiation_adding_ica_sw, only  : adding_ica_sw
     use radiation_cloud_generator_acc, only: cloud_generator_acc
     use radiation_cloud_cover, only    : beta2alpha, MaxCloudFrac
+#ifdef _OPENACC
+    use radiation_mcica_omp_sw, only : solver_mcica_omp_sw
+#endif
 
 #ifdef HAVE_NVTX
     use nvtx
@@ -175,6 +178,16 @@ contains
       call radiation_abort()
     end if
 
+#ifdef _OPENACC
+    call solver_mcica_omp_sw(nlev, istartcol, iendcol, config, single_level, cloud, &
+         & od, ssa, g, od_cloud, ssa_cloud, g_cloud, albedo_direct, albedo_diffuse, incoming_sw, flux)
+    if (lhook) call dr_hook('radiation_mcica_acc_sw:solver_mcica_acc_sw',1,hook_handle)
+#ifdef HAVE_NVTX
+    !$ACC WAIT(1)
+    call nvtxEndRange
+#endif
+    return
+#endif
     !$ACC DATA CREATE(flux_up, flux_dn_diffuse, flux_dn_direct, &
     !$ACC             flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
     !$ACC             sample_val, frac, frac_std, overlap_param, &

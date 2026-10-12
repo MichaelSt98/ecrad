@@ -293,6 +293,8 @@ contains
 
     !real(jprb)  totalMem
 
+    !$ACC ENTER DATA CREATE(ref_clear, trans_clear, ref_dir_clear, od_scaling, tmp_work_source, &
+    !$ACC& ref_dir, trans_dir_diff, trans_dir_dir, reflectance, transmittance) ASYNC(1)
 !$OMP TARGET ENTER DATA MAP(ALLOC: ref_clear,  trans_clear, ref_dir_clear, &
     !$OMP&   od_scaling, tmp_work_source,&
     !$OMP&   ref_dir, trans_dir_diff, trans_dir_dir, reflectance, transmittance)
@@ -300,6 +302,10 @@ contains
     nteams = ((iendcol-istartcol+1)*ng + 127) / 128
 #endif
 
+    !$ACC ENTER DATA CREATE(flux_up, flux_dn_diffuse, flux_dn_direct, &
+    !$ACC& flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
+    !$ACC& sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
+    !$ACC& pair_cloud_cover, cum_product, ibegin, iend) ASYNC(1)
     !$OMP TARGET ENTER DATA MAP(ALLOC: flux_up, flux_dn_diffuse, flux_dn_direct, &
     !$OMP             flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
     !$OMP             sample_val, frac, frac_std, overlap_param, &
@@ -320,6 +326,7 @@ contains
     !totalmem = totalMem*(iendcol-istartcol)*SIZEOF((real(jprb)))/1.e9
     !write(nulout,'(a,a,i0,a,g0.5)') __FILE__, " : LINE = ", __LINE__, " total_memory=",totalMem
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jlev = 1,nfsd
       do jcol = 1,ncdf
@@ -328,6 +335,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jcol = istartcol,iendcol
       do jlev = 1, nlev
@@ -337,6 +345,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     do jcol = istartcol,iendcol
       do jlev = 1, nlev-1
@@ -345,6 +354,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(overlap_alpha)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(overlap_alpha)
     do jcol = istartcol,iendcol
       !Only perform calculation if sun above the horizon
@@ -370,6 +380,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
     do jcol = istartcol,iendcol
       !Only perform calculation if sun above the horizon
@@ -403,6 +414,7 @@ contains
     end do
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
     do jcol = istartcol,iendcol
       !Only perform calculation if sun above the horizon
@@ -443,6 +455,7 @@ contains
          &  inv_fsd_interval, sample_val, od_scaling, cloud_cover_sw, &
          &  ibegin, iend, cum_cloud_cover, pair_cloud_cover, 512)
 #else
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jcol, jg) FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
     !$OMP& THREAD_LIMIT(512)
     do jcol = istartcol,iendcol
@@ -467,6 +480,8 @@ contains
     ! Split the former combined kernel so the always-on clear-sky path is not
     ! compiled together with cloudy two-stream/adding.
     ! Revert: restore radiation_mcica_omp_sw.F90.pre_split_l404
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC& PRIVATE(cos_sza, gamma1, gamma2, gamma3, od_total, ssa_total, g_total, jlev)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(cos_sza, gamma1, gamma2, gamma3, od_total, &
 #ifdef __NVCOMPILER
     !$OMP& ssa_total, g_total, jcol, jg, jlev) FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -540,6 +555,8 @@ contains
     end do ! Loop over columns
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC& PRIVATE(cos_sza, od_cloud_new, od_total, ssa_total, g_total, scat_od, jlev)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(cos_sza, od_cloud_new, od_total, &
 #ifdef __NVCOMPILER
     !$OMP& ssa_total, g_total, scat_od, jcol, jg, jlev) FIRSTPRIVATE(istartcol, iendcol, ng, nlev) &
@@ -668,6 +685,8 @@ contains
     ! 32 kB vL1d for the run to be fetched once and reused. Raising this to 256
     ! measured a vL1d miss ratio of 0.99 (from 0.06) and 14x the HBM traffic,
     ! making the kernel 5.6x slower despite the fuller wavefronts.
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) &
+    !$ACC& PRIVATE(cos_sza, sum_dn_diffuse, sum_dn_direct, sum_up)
 #ifdef __NVCOMPILER
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(cos_sza, sum_dn_diffuse, sum_dn_direct, sum_up) THREAD_LIMIT(128)
 #else
@@ -718,6 +737,7 @@ contains
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
     ! Loop through columns
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(cos_sza)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(cos_sza)
     do jlev = 1, nlev+1
       do jcol = istartcol,iendcol
@@ -764,6 +784,13 @@ contains
     end do ! Loop over levels
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC EXIT DATA DELETE(flux_up, flux_dn_diffuse, flux_dn_direct, &
+    !$ACC& flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
+    !$ACC& sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
+    !$ACC& pair_cloud_cover, cum_product, ibegin, iend) ASYNC(1)
+    !$ACC EXIT DATA DELETE(ref_clear, trans_clear, ref_dir_clear, od_scaling, tmp_work_source, &
+    !$ACC& ref_dir, trans_dir_diff, trans_dir_dir, reflectance, transmittance) ASYNC(1)
+    !$ACC WAIT(1)
     !$OMP TARGET EXIT DATA MAP(DELETE: flux_up, flux_dn_diffuse, flux_dn_direct, &
     !$OMP             flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
     !$OMP             sample_val, frac, frac_std, overlap_param, &
