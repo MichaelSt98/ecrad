@@ -317,14 +317,7 @@ contains
 
     ! Loop indices for level, column and g point
     integer :: jlev, jcol, jg
-#ifdef __NVCOMPILER
-    ! nvfortran launches these kernels one team per SM (grid=148 on B200)
-    ! whatever THREAD_LIMIT asks for, which leaves the GPU ~6% occupied. Sizing
-    ! the team count from the iteration space instead is worth ~1.6x; it is
-    ! derived from the work rather than the device so it needs no device query
-    ! and scales with the column block. See README-cloud-generator-debug.md.
-    integer :: nteams
-#endif
+    integer :: vector_len
 
 
     !real(jprb)  totalMem
@@ -335,9 +328,10 @@ contains
     !totalmem = totalMem*(iendcol-istartcol)*SIZEOF((real(jprb)))/1.e9
     !write(nulout,'(a,a,i0,a,g0.5)') __FILE__, " : LINE = ", __LINE__, " total_memory=",totalMem
 
-#ifdef __NVCOMPILER
-    nteams = ((iendcol-istartcol+1)*ng + 127) / 128
-#endif
+    ! At NPROMA=32, 128 lanes give only 35 gangs for 140 LW g-points.
+    ! A warp-sized vector spreads small blocks over more multiprocessors.
+    vector_len = 128
+    if (iendcol-istartcol+1 <= 64) vector_len = 32
 
     !$ACC ENTER DATA CREATE(flux_up, flux_dn, flux_up_clear, flux_dn_clear, &
     !$ACC& is_clear_sky_layer, sample_val, frac, frac_std, overlap_param, cum_cloud_cover, &
@@ -494,7 +488,7 @@ contains
     ! Split the former combined kernel so the always-on clear-sky path is not
     ! compiled together with cloudy two-stream/adding (high VGPR/scratch).
     ! Revert: restore radiation_mcica_acc_gpoint_lw.F90.pre_split_l435
-    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128)
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(vector_len)
 #ifdef __NVCOMPILER
 #else
 #endif
@@ -518,7 +512,7 @@ contains
        end do
     end do
 
-    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(vector_len) &
     !$ACC& PRESENT(ssa_cloud, g_cloud) &
     !$ACC& PRIVATE(od_cloud_new, od_total, ssa_total, g_total, scat_od, jlev, i_cloud_top)
 #ifdef __NVCOMPILER

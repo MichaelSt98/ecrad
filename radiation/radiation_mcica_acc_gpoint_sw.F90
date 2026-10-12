@@ -284,22 +284,15 @@ contains
 
     ! Loop indices for level, column and g point
     integer :: jlev, jcol, jg
-#ifdef __NVCOMPILER
-    ! nvfortran launches these kernels one team per SM (grid=148 on B200)
-    ! whatever THREAD_LIMIT asks for, which leaves the GPU ~6% occupied. Sizing
-    ! the team count from the iteration space instead is worth ~1.6x; it is
-    ! derived from the work rather than the device so it needs no device query
-    ! and scales with the column block. See README-cloud-generator-debug.md.
-    integer :: nteams
-#endif
+    integer :: vector_len
 
     !real(jprb)  totalMem
 
     !$ACC ENTER DATA CREATE(ref_clear, trans_clear, ref_dir_clear, od_scaling, tmp_work_source, &
     !$ACC& ref_dir, trans_dir_diff, trans_dir_dir, reflectance, transmittance) ASYNC(1)
-#ifdef __NVCOMPILER
-    nteams = ((iendcol-istartcol+1)*ng + 127) / 128
-#endif
+    ! Keep the large-block geometry; avoid only 28 gangs at NPROMA=32.
+    vector_len = 128
+    if (iendcol-istartcol+1 <= 64) vector_len = 32
 
     !$ACC ENTER DATA CREATE(flux_up, flux_dn_diffuse, flux_dn_direct, &
     !$ACC& flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &
@@ -452,7 +445,7 @@ contains
     ! Split the former combined kernel so the always-on clear-sky path is not
     ! compiled together with cloudy two-stream/adding.
     ! Revert: restore radiation_mcica_acc_gpoint_sw.F90.pre_split_l404
-    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(vector_len) &
     !$ACC& PRIVATE(cos_sza, gamma1, gamma2, gamma3, od_total, ssa_total, g_total, jlev)
 #ifdef __NVCOMPILER
 #else
@@ -522,7 +515,7 @@ contains
        end do !loop over spectral bands
     end do ! Loop over columns
 
-    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(128) &
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) VECTOR_LENGTH(vector_len) &
     !$ACC& PRIVATE(cos_sza, od_cloud_new, od_total, ssa_total, g_total, scat_od, jlev)
 #ifdef __NVCOMPILER
 #else

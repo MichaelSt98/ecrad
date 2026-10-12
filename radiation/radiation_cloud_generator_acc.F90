@@ -512,12 +512,15 @@ contains
     real(jprb) :: trigger, rand_top, rand_cloud, rand_inhom1, rand_inhom2
     real(jprb) :: overlap_param_inhom, overhang, wfsd, wcdf, cover
     integer    :: jcol, jg, jlev, jcloud, itrigger, n_layers_to_scale
-    integer    :: ifsd, icdf, icol_begin, icol_end
+    integer    :: ifsd, icdf, icol_begin, icol_end, vector_len
     logical    :: do_fill_od_scaling
     integer(kind=jpib) :: istate
 
-    ! Share the column/g-point algorithm across GPU directive backends.
+    ! Match the small-block scalar solver geometry without changing samples.
+    vector_len = 128
+    if (iendcol-istartcol+1 <= 64) vector_len = 32
     !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) &
+    !$ACC& VECTOR_LENGTH(vector_len) &
     !$ACC& PRIVATE(jlev, trigger, rand_top, rand_cloud, rand_inhom1, rand_inhom2, &
     !$ACC& overlap_param_inhom, overhang, wfsd, wcdf, cover, itrigger, jcloud, &
     !$ACC& n_layers_to_scale, ifsd, icdf, icol_begin, icol_end, do_fill_od_scaling, istate)
