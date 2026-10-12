@@ -11,6 +11,17 @@ set( TEST_IFS_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/ecrad_meridian.nc" )
 set( TEST_IFS_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY49R1.nam" )
 set( TEST_ECCKD_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY49R1_ecckd.nam" )
 
+if( HAVE_ACC )
+    ecbuild_add_test(
+        TARGET ecrad_${PREC}_acc_rng_compatibility
+        SOURCES acc_rng_compatibility.F90
+        LIBS ecrad.${PREC} ecrad_base.${PREC}
+    )
+    # NVHPC searches its output directory before dependency module paths.
+    set_target_properties( ecrad_${PREC}_acc_rng_compatibility PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rng-module" )
+endif()
+
 # Create symbolic link to test data
 file( CREATE_LINK "${PROJECT_SOURCE_DIR}/data" "${CMAKE_CURRENT_BINARY_DIR}/data" SYMBOLIC )
 

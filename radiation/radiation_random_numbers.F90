@@ -349,10 +349,29 @@ contains
     integer(kind=jpib), intent(inout) :: istate
     real(kind=jprb), intent(out)   :: randnum
 
+#ifdef _OPENACC
+    integer(kind=jpib), parameter :: modulus = 2147483647_jpib
+    integer(kind=jpib) :: product
+#endif
+
     !$ACC ROUTINE SEQ
 
-    ! C++ minstd_rand algorithm
+    ! C++ minstd_rand algorithm. In the reachable nonnegative state range,
+    ! the product is an exact integer below 2**47. Fold modulo 2**31-1
+    ! instead of promoting the integer state to an expensive real MOD.
+    ! One subtraction is sufficient: the high part is at most 48270.
+#ifdef _OPENACC
+    if (istate >= 0_jpib .and. istate <= modulus) then
+      product = 48271_jpib * istate
+      istate = iand(product, modulus) + ishft(product, -31)
+      if (istate >= modulus) istate = istate - modulus
+    else
+      ! Preserve the legacy behavior for callers outside the normal range.
+      istate = mod(IMinstdA * istate, IMinstdM)
+    end if
+#else
     istate = mod(IMinstdA * istate, IMinstdM)
+#endif
     randnum = IMinstdScale * istate
 
   end subroutine uniform_distribution_acc_gpoint
