@@ -322,19 +322,14 @@ BOUND_MAX=MAXVAL(KLAYTROP)
 #ifdef _OPENACC
     ! Every sunlit column has the same cumulative spectral offset. Keeping
     ! it on the host removes the IW dependency between successive g-points.
-    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) FIRSTPRIVATE(IWOFFSET)
-    DO JG=1,IGT
-      DO JL=KIDIA,KFDIA
-        IF (PRMU0(JL) > 0.0_JPRB) THEN
-          PINCSOL(JL,IWOFFSET+JG)=ZSFLXZEN(JL,JG)
-        ENDIF
-      ENDDO
-    ENDDO
+    ! Store the column flux once while assembling the layer optical depths.
+    ! The band scratch is consumed on this queue before the next band reuses it.
     !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1) FIRSTPRIVATE(IWOFFSET)
     DO JG=1,IGT
       DO JK=1,KLEV
         DO JL=KIDIA,KFDIA
           IF (PRMU0(JL) > 0.0_JPRB) THEN
+            IF (JK == 1) PINCSOL(JL,IWOFFSET+JG)=ZSFLXZEN(JL,JG)
             POD(JL,JK,IWOFFSET+JG)=ZTAUR(JL,JK,JG)+ZTAUG(JL,JK,JG)
             PSSA(JL,JK,IWOFFSET+JG)=ZTAUR(JL,JK,JG)/POD(JL,JK,IWOFFSET+JG)
           ENDIF

@@ -788,6 +788,9 @@ contains
 
     real(jprb) :: cloud_fraction_threshold, cloud_mixing_ratio_threshold
     real(jprb) :: sum_mixing_ratio(istartcol:iendcol)
+#ifdef _OPENACC
+    real(jprb) :: sum_layer_mixing_ratio
+#endif
 
     real(jphook) :: hook_handle
 
@@ -795,6 +798,24 @@ contains
 
     nlev = size(this%fraction,2)
 
+#ifdef _OPENACC
+    ! Layers are independent; keep the hydrometeor sum ordered within each
+    ! work item instead of reusing a column scratch array across levels.
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1) PRIVATE(sum_layer_mixing_ratio, jh)
+    do jlev = 1,nlev
+      do jcol = istartcol,iendcol
+        sum_layer_mixing_ratio = 0.0_jprb
+        !$ACC LOOP SEQ
+        do jh = 1,this%ntype
+          sum_layer_mixing_ratio = sum_layer_mixing_ratio + this%mixing_ratio(jcol,jlev,jh)
+        end do
+        if (this%fraction(jcol,jlev) < cloud_fraction_threshold &
+             & .or. sum_layer_mixing_ratio < cloud_mixing_ratio_threshold) then
+          this%fraction(jcol,jlev) = 0.0_jprb
+        end if
+      end do
+    end do
+#else
     !$ACC PARALLEL DEFAULT(PRESENT) CREATE(sum_mixing_ratio) ASYNC(1)
     !$ACC LOOP SEQ
     do jlev = 1,nlev
@@ -819,6 +840,7 @@ contains
     end do
     !$ACC END PARALLEL
 
+#endif
     if (lhook) call dr_hook('radiation_cloud:crop_cloud_fraction',1,hook_handle)
 
   end subroutine crop_cloud_fraction
