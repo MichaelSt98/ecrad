@@ -1,0 +1,66 @@
+diff --git a/driver/ecrad_ifs_driver_blocked.F90 b/driver/ecrad_ifs_driver_blocked.F90
+index 7256974..8515de9 100644
+--- a/driver/ecrad_ifs_driver_blocked.F90
++++ b/driver/ecrad_ifs_driver_blocked.F90
+@@ -75,0 +76,7 @@ program ecrad_ifs_driver
++#ifdef OMPGPU
++  use omp_lib, only : omp_is_initial_device
++#endif
++#ifdef _OPENACC
++  use openacc, only : acc_on_device, acc_device_host
++  use iso_c_binding, only : c_int
++#endif
+@@ -77,0 +85,12 @@ program ecrad_ifs_driver
++#ifdef _OPENACC
++  interface
++    integer(c_int) function cudaProfilerStart() bind(C, name='cudaProfilerStart')
++      import c_int
++    end function cudaProfilerStart
++    integer(c_int) function cudaProfilerStop() bind(C, name='cudaProfilerStop')
++      import c_int
++    end function cudaProfilerStop
++  end interface
++  integer(c_int) :: profiler_status
++#endif
++
+@@ -139,0 +159,3 @@ program ecrad_ifs_driver
++  real(jprd) :: benchmark_elapsed
++  integer(kind=8) :: benchmark_clock_start, benchmark_clock_stop, benchmark_clock_rate
++  integer :: benchmark_on_device
+@@ -398,0 +421,15 @@ program ecrad_ifs_driver
++  benchmark_on_device = -1
++#ifdef OMPGPU
++  !$omp target map(from:benchmark_on_device)
++  benchmark_on_device = merge(0, 1, omp_is_initial_device())
++  !$omp end target
++#endif
++#ifdef _OPENACC
++  !$acc serial copyout(benchmark_on_device)
++  benchmark_on_device = merge(0, 1, acc_on_device(acc_device_host))
++  !$acc end serial
++#endif
++  write(nulout,'(a,i0)') 'BENCHMARK_GPU_EXECUTION ', benchmark_on_device
++#if defined(OMPGPU) || defined(_OPENACC)
++  if (benchmark_on_device /= 1) stop 2
++#endif
+@@ -399,0 +437,8 @@ program ecrad_ifs_driver
++    if (jrepeat == driver_config%nwarmup + 1) then
++      !$acc wait
++#ifdef _OPENACC
++      profiler_status = cudaProfilerStart()
++      if (profiler_status /= 0) stop 'CUDA profiler start failed'
++#endif
++      call system_clock(benchmark_clock_start, benchmark_clock_rate)
++    end if
+@@ -551,0 +597,11 @@ program ecrad_ifs_driver
++  ! Common benchmark timer: finish all device work before stopping.
++  !$acc wait
++  call system_clock(benchmark_clock_stop)
++#ifdef _OPENACC
++  profiler_status = cudaProfilerStop()
++  if (profiler_status /= 0) stop 'CUDA profiler stop failed'
++#endif
++  benchmark_elapsed = real(benchmark_clock_stop-benchmark_clock_start,jprd)/real(benchmark_clock_rate,jprd)
++  write(nulout,'(a,es24.16)') 'BENCHMARK_WALL_SECONDS ', benchmark_elapsed
++  write(nulout,'(a,i0)') 'BENCHMARK_MEASURED_ITERATIONS ', driver_config%nrepeat-driver_config%nwarmup
++  write(nulout,'(a,i0)') 'BENCHMARK_COLUMNS ', ncol

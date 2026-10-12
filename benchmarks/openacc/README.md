@@ -1,5 +1,10 @@
 # Reproducing the incremental 1.7.1-acc backport measurements
 
+The subsequent fixed-small-NPROMA investigation is documented in
+[OPENACC_SMALL_NPROMA.md](../../OPENACC_SMALL_NPROMA.md), with warmed capture
+and matched evidence in `small-np-results.json`. The original backport record
+below remains the historical parent benchmark.
+
 `backport-results.json` records the release/donor/checkpoint commits, incremental
 three-run medians and ranges, final five-run results and validation counts.
 `config.nam` is the full benchmark physics configuration. The driver patch is

@@ -1,0 +1,1174 @@
+{
+  "base_commit": "8414ec356c97fc05ba3df2809920882309165a82",
+  "source_commit": "ae2884c09d309613b2d82afe29921a7cf304d3e2",
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "compiler": "NVHPC 24.5",
+  "final_job": 37780023,
+  "protocol": {
+    "executions_per_case": 5,
+    "repeat": 10,
+    "warmup": 1,
+    "columns": 16960,
+    "timing": "synchronized radiation plus per-block transfers; no profiling in timed runs"
+  },
+  "incremental": {
+    "bounds": {
+      "ctest_passed": 24,
+      "coverage_comparisons": 14,
+      "times": {
+        "32": {
+          "median": 5.9730482,
+          "min": 5.970292533333333,
+          "max": 5.980203888888889
+        },
+        "200": {
+          "median": 1.3260481333333334,
+          "min": 1.3256603333333332,
+          "max": 1.3275551
+        },
+        "4096": {
+          "median": 0.5172692333333333,
+          "min": 0.5172608666666667,
+          "max": 0.5172710111111111
+        }
+      }
+    },
+    "geometry": {
+      "ctest_passed": 24,
+      "coverage_comparisons": 14,
+      "times": {
+        "32": {
+          "median": 5.927849977777778,
+          "min": 5.922502533333333,
+          "max": 5.933542433333333
+        },
+        "200": {
+          "median": 1.3276345444444444,
+          "min": 1.3271595555555555,
+          "max": 1.3284391
+        },
+        "4096": {
+          "median": 0.5260516444444444,
+          "min": 0.5257715333333333,
+          "max": 0.5262766666666666
+        }
+      }
+    },
+    "coeff": {
+      "ctest_passed": 24,
+      "coverage_comparisons": 14,
+      "times": {
+        "32": {
+          "median": 5.775032777777778,
+          "min": 5.705456888888889,
+          "max": 5.7794222
+        },
+        "200": {
+          "median": 1.2866475555555554,
+          "min": 1.2843925333333333,
+          "max": 1.3000326666666666
+        },
+        "4096": {
+          "median": 0.5224081111111112,
+          "min": 0.5224012222222222,
+          "max": 0.5265838777777777
+        }
+      }
+    },
+    "rng": {
+      "ctest_passed": 26,
+      "coverage_comparisons": 14,
+      "times": {
+        "32": {
+          "median": 5.2220392222222225,
+          "min": 5.220775011111112,
+          "max": 5.2266017555555555
+        },
+        "200": {
+          "median": 1.1911405666666668,
+          "min": 1.1899058777777778,
+          "max": 1.1925406666666667
+        },
+        "4096": {
+          "median": 0.4958421111111111,
+          "min": 0.49583254444444447,
+          "max": 0.49661000000000005
+        }
+      }
+    },
+    "layers": {
+      "ctest_passed": 26,
+      "coverage_comparisons": 14,
+      "times": {
+        "32": {
+          "median": 5.103912,
+          "min": 5.097809788888889,
+          "max": 5.104290555555555
+        },
+        "200": {
+          "median": 1.1671687666666668,
+          "min": 1.1670573222222222,
+          "max": 1.1682162222222223
+        },
+        "4096": {
+          "median": 0.49479277777777775,
+          "min": 0.49455888888888894,
+          "max": 0.4949937555555555
+        }
+      }
+    }
+  },
+  "final": {
+    "32": {
+      "baseline": {
+        "median": 6.554648655555556,
+        "min": 6.469822211111111,
+        "max": 6.5604687777777775
+      },
+      "optimized": {
+        "median": 5.1652319888888885,
+        "min": 5.160455111111111,
+        "max": 5.1980279000000005
+      },
+      "time_reduction_percent": 21.197423991429854
+    },
+    "64": {
+      "baseline": {
+        "median": 3.5838374555555554,
+        "min": 3.581522088888889,
+        "max": 3.604166233333333
+      },
+      "optimized": {
+        "median": 2.8764936555555556,
+        "min": 2.8746898666666665,
+        "max": 2.879462211111111
+      },
+      "time_reduction_percent": 19.73705026447271
+    },
+    "128": {
+      "baseline": {
+        "median": 2.058685011111111,
+        "min": 2.0564712333333333,
+        "max": 2.0601161
+      },
+      "optimized": {
+        "median": 1.6864795333333333,
+        "min": 1.6853155555555555,
+        "max": 1.7001118888888889
+      },
+      "time_reduction_percent": 18.07976819032122
+    },
+    "200": {
+      "baseline": {
+        "median": 1.4234641111111113,
+        "min": 1.4228523222222222,
+        "max": 1.4245126666666668
+      },
+      "optimized": {
+        "median": 1.181597788888889,
+        "min": 1.1801375444444444,
+        "max": 1.1825763333333332
+      },
+      "time_reduction_percent": 16.99138884741036
+    },
+    "1024": {
+      "baseline": {
+        "median": 0.6793265555555555,
+        "min": 0.678950088888889,
+        "max": 0.6794270111111111
+      },
+      "optimized": {
+        "median": 0.6172912333333334,
+        "min": 0.6168149777777778,
+        "max": 0.6173219888888889
+      },
+      "time_reduction_percent": 9.131885352470803
+    },
+    "4096": {
+      "baseline": {
+        "median": 0.5263911,
+        "min": 0.5258474333333333,
+        "max": 0.5271241111111111
+      },
+      "optimized": {
+        "median": 0.4988399,
+        "min": 0.49813765555555556,
+        "max": 0.49918197777777773
+      },
+      "time_reduction_percent": 5.23397906993488
+    }
+  },
+  "profiles": {
+    "baseline-B32": {
+      "kernel_launches": 136740,
+      "kernel_time_seconds": 4.284487217,
+      "top_kernels": [
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_520_gpu",
+          "calls": 530,
+          "seconds": 0.534871649,
+          "grid_x": 35,
+          "block_x": 128,
+          "registers_per_thread": 104
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_520_gpu",
+          "calls": 530,
+          "seconds": 0.532088093,
+          "grid_x": 28,
+          "block_x": 128,
+          "registers_per_thread": 104
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_525_gpu",
+          "calls": 530,
+          "seconds": 0.413833039,
+          "grid_x": 28,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_455_gpu",
+          "calls": 530,
+          "seconds": 0.346317977,
+          "grid_x": 28,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_521_gpu",
+          "calls": 530,
+          "seconds": 0.281375402,
+          "grid_x": 35,
+          "block_x": 128,
+          "registers_per_thread": 137
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_497_gpu",
+          "calls": 530,
+          "seconds": 0.196765968,
+          "grid_x": 35,
+          "block_x": 128,
+          "registers_per_thread": 106
+        },
+        {
+          "name": "rrtm_setcoef_140gp_84_gpu",
+          "calls": 530,
+          "seconds": 0.155524026,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 84
+        },
+        {
+          "name": "srtm_setcoef_79_gpu",
+          "calls": 530,
+          "seconds": 0.142184199,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 80
+        },
+        {
+          "name": "radiation_cloud_crop_cloud_fraction_798_gpu",
+          "calls": 530,
+          "seconds": 0.131763859,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 32
+        },
+        {
+          "name": "srtm_taumol21_91_gpu",
+          "calls": 530,
+          "seconds": 0.131438643,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol24_93_gpu",
+          "calls": 530,
+          "seconds": 0.093431619,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 255
+        },
+        {
+          "name": "srtm_taumol18_91_gpu",
+          "calls": 530,
+          "seconds": 0.09281124,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol19_90_gpu",
+          "calls": 530,
+          "seconds": 0.091127503,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol20_89_gpu",
+          "calls": 530,
+          "seconds": 0.081924462,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "rrtm_prepare_gases_220_gpu",
+          "calls": 530,
+          "seconds": 0.0786122,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 80
+        },
+        {
+          "name": "srtm_taumol17_139_gpu",
+          "calls": 530,
+          "seconds": 0.066123669,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        }
+      ]
+    },
+    "baseline-B200": {
+      "kernel_launches": 21930,
+      "kernel_time_seconds": 0.971762778,
+      "top_kernels": [
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_520_gpu",
+          "calls": 84,
+          "seconds": 0.109153411,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 104
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_520_gpu",
+          "calls": 85,
+          "seconds": 0.108494468,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 104
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_525_gpu",
+          "calls": 84,
+          "seconds": 0.106623931,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_455_gpu",
+          "calls": 84,
+          "seconds": 0.082941219,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_521_gpu",
+          "calls": 84,
+          "seconds": 0.064338606,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 137
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_497_gpu",
+          "calls": 84,
+          "seconds": 0.047572793,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 106
+        },
+        {
+          "name": "rrtm_setcoef_140gp_84_gpu",
+          "calls": 85,
+          "seconds": 0.025219382,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 84
+        },
+        {
+          "name": "srtm_setcoef_79_gpu",
+          "calls": 85,
+          "seconds": 0.024420352,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 80
+        },
+        {
+          "name": "srtm_taumol21_91_gpu",
+          "calls": 85,
+          "seconds": 0.022571613,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "radiation_cloud_crop_cloud_fraction_798_gpu",
+          "calls": 85,
+          "seconds": 0.022482395,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 32
+        },
+        {
+          "name": "srtm_taumol24_93_gpu",
+          "calls": 85,
+          "seconds": 0.018591128,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 255
+        },
+        {
+          "name": "srtm_taumol18_91_gpu",
+          "calls": 85,
+          "seconds": 0.017502556,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol20_89_gpu",
+          "calls": 85,
+          "seconds": 0.016199728,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol19_90_gpu",
+          "calls": 85,
+          "seconds": 0.015922932,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_650_gpu",
+          "calls": 84,
+          "seconds": 0.015519418,
+          "grid_x": 216,
+          "block_x": 128,
+          "registers_per_thread": 134
+        },
+        {
+          "name": "srtm_taumol17_139_gpu",
+          "calls": 85,
+          "seconds": 0.01446539,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        }
+      ]
+    },
+    "optimized-B32": {
+      "kernel_launches": 100700,
+      "kernel_time_seconds": 3.29663621,
+      "top_kernels": [
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_518_gpu",
+          "calls": 530,
+          "seconds": 0.378542914,
+          "grid_x": 112,
+          "block_x": 32,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_448_gpu",
+          "calls": 530,
+          "seconds": 0.322314161,
+          "grid_x": 112,
+          "block_x": 32,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_522_gpu",
+          "calls": 530,
+          "seconds": 0.303290694,
+          "grid_x": 140,
+          "block_x": 32,
+          "registers_per_thread": 146
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_522_gpu",
+          "calls": 530,
+          "seconds": 0.301213706,
+          "grid_x": 112,
+          "block_x": 32,
+          "registers_per_thread": 146
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_515_gpu",
+          "calls": 530,
+          "seconds": 0.27489314,
+          "grid_x": 140,
+          "block_x": 32,
+          "registers_per_thread": 137
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_491_gpu",
+          "calls": 530,
+          "seconds": 0.193667584,
+          "grid_x": 140,
+          "block_x": 32,
+          "registers_per_thread": 106
+        },
+        {
+          "name": "srtm_taumol21_102_gpu",
+          "calls": 530,
+          "seconds": 0.13144627,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol18_102_gpu",
+          "calls": 530,
+          "seconds": 0.099251516,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol24_104_gpu",
+          "calls": 530,
+          "seconds": 0.094199434,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 255
+        },
+        {
+          "name": "srtm_taumol19_101_gpu",
+          "calls": 530,
+          "seconds": 0.092147871,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol20_100_gpu",
+          "calls": 530,
+          "seconds": 0.081886322,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "rrtm_prepare_gases_220_gpu",
+          "calls": 530,
+          "seconds": 0.078656825,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 80
+        },
+        {
+          "name": "srtm_taumol17_150_gpu",
+          "calls": 530,
+          "seconds": 0.068607503,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol22_107_gpu",
+          "calls": 530,
+          "seconds": 0.063520743,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 120
+        },
+        {
+          "name": "srtm_taumol23_99_gpu",
+          "calls": 530,
+          "seconds": 0.059961292,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol25_95_gpu",
+          "calls": 530,
+          "seconds": 0.044129912,
+          "grid_x": 1,
+          "block_x": 128,
+          "registers_per_thread": 152
+        }
+      ]
+    },
+    "optimized-B200": {
+      "kernel_launches": 16150,
+      "kernel_time_seconds": 0.799034522,
+      "top_kernels": [
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_518_gpu",
+          "calls": 84,
+          "seconds": 0.106683649,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_448_gpu",
+          "calls": 84,
+          "seconds": 0.08298322,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 204
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_515_gpu",
+          "calls": 84,
+          "seconds": 0.064391189,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 137
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_522_gpu",
+          "calls": 84,
+          "seconds": 0.062567659,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 146
+        },
+        {
+          "name": "radiation_cloud_generator_acc_cloud_generator_block_acc_gpoint_522_gpu",
+          "calls": 85,
+          "seconds": 0.06167105,
+          "grid_x": 175,
+          "block_x": 128,
+          "registers_per_thread": 146
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_lw_solver_mcica_acc_gpoint_lw_impl_491_gpu",
+          "calls": 84,
+          "seconds": 0.047582969,
+          "grid_x": 219,
+          "block_x": 128,
+          "registers_per_thread": 106
+        },
+        {
+          "name": "srtm_taumol21_102_gpu",
+          "calls": 85,
+          "seconds": 0.022576586,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol24_104_gpu",
+          "calls": 85,
+          "seconds": 0.018561126,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 255
+        },
+        {
+          "name": "srtm_taumol18_102_gpu",
+          "calls": 85,
+          "seconds": 0.017423929,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "srtm_taumol20_100_gpu",
+          "calls": 85,
+          "seconds": 0.01616633,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol19_101_gpu",
+          "calls": 85,
+          "seconds": 0.015933219,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 246
+        },
+        {
+          "name": "radiation_mcica_acc_gpoint_sw_solver_mcica_acc_gpoint_sw_impl_643_gpu",
+          "calls": 84,
+          "seconds": 0.015541412,
+          "grid_x": 216,
+          "block_x": 128,
+          "registers_per_thread": 134
+        },
+        {
+          "name": "srtm_taumol17_150_gpu",
+          "calls": 85,
+          "seconds": 0.014458877,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "rrtm_prepare_gases_220_gpu",
+          "calls": 85,
+          "seconds": 0.014006291,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 80
+        },
+        {
+          "name": "srtm_taumol23_99_gpu",
+          "calls": 85,
+          "seconds": 0.01346229,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 254
+        },
+        {
+          "name": "srtm_taumol22_107_gpu",
+          "calls": 85,
+          "seconds": 0.012804443,
+          "grid_x": 2,
+          "block_x": 128,
+          "registers_per_thread": 120
+        }
+      ]
+    }
+  },
+  "max_saved_benchmark_error": 0.0,
+  "matched_executions": 60,
+  "edge_checks": [
+    {
+      "case": "all-night",
+      "precision": "dp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "lw-only",
+      "precision": "dp",
+      "supported": false,
+      "reason": "Provided two-channel coefficient files rejected by both snapshots",
+      "parent_error": "*** Error: number of shortwave bands for droplets (14) does not match number for gases (0)",
+      "candidate_error": "*** Error: number of shortwave bands for droplets (14) does not match number for gases (0)"
+    },
+    {
+      "case": "sw-only-sunlit",
+      "precision": "dp",
+      "supported": false,
+      "reason": "Provided two-channel coefficient files rejected by both snapshots",
+      "parent_error": "*** Error: number of longwave bands for droplets (16) does not match number for gases (0)",
+      "candidate_error": "*** Error: number of longwave bands for droplets (16) does not match number for gases (0)"
+    },
+    {
+      "case": "solar-scaling",
+      "precision": "dp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "weighted-surface",
+      "precision": "dp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "reduced-levels",
+      "precision": "dp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "all-night",
+      "precision": "sp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.1,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "lw-only",
+      "precision": "sp",
+      "supported": false,
+      "reason": "Provided two-channel coefficient files rejected by both snapshots",
+      "parent_error": "*** Error: number of shortwave bands for droplets (14) does not match number for gases (0)",
+      "candidate_error": "*** Error: number of shortwave bands for droplets (14) does not match number for gases (0)"
+    },
+    {
+      "case": "sw-only-sunlit",
+      "precision": "sp",
+      "supported": false,
+      "reason": "Provided two-channel coefficient files rejected by both snapshots",
+      "parent_error": "*** Error: number of longwave bands for droplets (16) does not match number for gases (0)",
+      "candidate_error": "*** Error: number of longwave bands for droplets (16) does not match number for gases (0)"
+    },
+    {
+      "case": "solar-scaling",
+      "precision": "sp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.1,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "weighted-surface",
+      "precision": "sp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.1,
+        "other": 0.0
+      }
+    },
+    {
+      "case": "reduced-levels",
+      "precision": "sp",
+      "supported": true,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.1,
+        "other": 0.0
+      }
+    }
+  ],
+  "cpu_reentry": [
+    {
+      "threads": 1,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    },
+    {
+      "threads": 8,
+      "passed": true,
+      "max_errors": {
+        "pressure_hl": 0.0,
+        "flux_up_lw": 0.0,
+        "flux_dn_lw": 0.0,
+        "flux_up_lw_clear": 0.0,
+        "flux_dn_lw_clear": 0.0,
+        "lw_derivative": 0.0,
+        "canopy_flux_dn_lw_surf": 0.0,
+        "flux_up_sw": 0.0,
+        "flux_dn_sw": 0.0,
+        "flux_dn_direct_sw": 0.0,
+        "flux_up_sw_clear": 0.0,
+        "flux_dn_sw_clear": 0.0,
+        "flux_dn_direct_sw_clear": 0.0,
+        "spectral_flux_dn_sw_surf": 0.0,
+        "spectral_flux_dn_direct_sw_surf": 0.0,
+        "spectral_flux_dn_sw_surf_clear": 0.0,
+        "spectral_flux_dn_direct_sw_surf_clear": 0.0,
+        "canopy_flux_dn_diffuse_sw_surf": 0.0,
+        "canopy_flux_dn_direct_sw_surf": 0.0,
+        "cloud_cover_lw": 0.0,
+        "cloud_cover_sw": 0.0
+      },
+      "failures": {},
+      "compared_column_range": [
+        1,
+        32
+      ],
+      "tolerances": {
+        "lw_variables": 0.001,
+        "sw_variables": 0.001,
+        "other": 0.0
+      }
+    }
+  ],
+  "cpu_ctest_passed": 182,
+  "rng_exhaustive": {
+    "dp": {
+      "states": 2147483654,
+      "errors": 0
+    },
+    "sp": {
+      "states": 2147483654,
+      "errors": 0
+    }
+  }
+}
