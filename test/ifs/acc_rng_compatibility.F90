@@ -1,6 +1,7 @@
 ! (C) Copyright 2026- ECMWF.
 ! Licensed under the Apache Licence Version 2.0; see COPYING.
 program acc_rng_compatibility
+  use openacc, only : acc_on_device, acc_device_host
   use parkind1, only : jpib, jprb
   use radiation_random_numbers, only : uniform_distribution_acc, uniform_distribution_acc_gpoint
   implicit none
@@ -9,6 +10,12 @@ program acc_rng_compatibility
   integer(jpib) :: fallback(6)
   real(jprb) :: old_random, new_random
   character(len=32) :: argument
+  logical :: on_device
+
+  !$acc serial copyout(on_device)
+  on_device = .not. acc_on_device(acc_device_host)
+  !$acc end serial
+  if (.not. on_device) stop 'RNG compatibility test requires GPU execution'
 
   samples = 1000000_jpib
   if (command_argument_count() > 0) then
