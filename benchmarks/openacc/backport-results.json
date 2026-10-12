@@ -1,0 +1,198 @@
+{
+  "base": "a21f2779b286f7a18c2985a744098d903d6d745e",
+  "donor": "7ea1fefdad3feaf996ff17b4d5e25c79b2e98635",
+  "source_commit": "52be10ca809e8ca6d50b1ea1254af8018cfee670",
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "compiler": "NVHPC 24.5",
+  "flags": "Release -O3 -Mrecursive -gpu=cc80; ACC ON, OMP OFF; DP/SP, BITIDENTITY ON, FIAT ON",
+  "input_sha256": "214b418cccfaac72b2f772eb7a8135ac8e8f8a2719fed96764d6caef51d5cb89",
+  "incremental": {
+    "baseline": {
+      "commit": "a21f2779b286f7a18c2985a744098d903d6d745e",
+      "job": 37683595,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 3.493054122222222,
+          "min": 3.4915960888888886,
+          "max": 3.494288788888889
+        },
+        "4096": {
+          "median": 0.980825,
+          "min": 0.9798819999999999,
+          "max": 0.9808935555555556
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    },
+    "planck": {
+      "commit": "16b635654a877b79c93777cae8545afa70816ba8",
+      "job": 37685554,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 2.4475257555555556,
+          "min": 2.446957877777778,
+          "max": 2.4497155333333334
+        },
+        "4096": {
+          "median": 0.9212796333333334,
+          "min": 0.9210939888888888,
+          "max": 0.9216415555555556
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    },
+    "gas": {
+      "commit": "8780033d06eb859155ace5b67cd371053b9b6ef0",
+      "job": 37687137,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 2.0273618888888887,
+          "min": 2.0258244333333333,
+          "max": 2.0280714555555557
+        },
+        "4096": {
+          "median": 0.8803923333333333,
+          "min": 0.88021,
+          "max": 0.8803985555555556
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    },
+    "cloud": {
+      "commit": "fe5967a957a960a86589130cafe7220ca1060889",
+      "job": 37689275,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 1.7525815333333332,
+          "min": 1.748888888888889,
+          "max": 1.7527645666666667
+        },
+        "4096": {
+          "median": 0.8567932111111111,
+          "min": 0.8566501111111111,
+          "max": 0.8569264333333333
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    },
+    "aerosol": {
+      "commit": "6f63a09bc84bda91658085ce0058116dce5ccca0",
+      "job": 37692549,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 1.6021534333333334,
+          "min": 1.5980384555555556,
+          "max": 1.6028166555555556
+        },
+        "4096": {
+          "median": 0.7923108999999999,
+          "min": 0.7921597888888888,
+          "max": 0.7924993222222222
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    },
+    "mcica": {
+      "commit": "52be10ca809e8ca6d50b1ea1254af8018cfee670",
+      "job": 37696706,
+      "ctest_passed": 24,
+      "coverage_passed": 14,
+      "times": {
+        "200": {
+          "median": 1.4074090000000001,
+          "min": 1.406227877777778,
+          "max": 1.408175888888889
+        },
+        "4096": {
+          "median": 0.5213977666666667,
+          "min": 0.5208243222222222,
+          "max": 0.5215364222222223
+        }
+      },
+      "runs_per_case": 3,
+      "repeat": 10,
+      "warmup": 1
+    }
+  },
+  "final": {
+    "32": {
+      "baseline": {
+        "median": 14.084607855555555,
+        "min": 14.077032433333335,
+        "max": 14.086986666666668
+      },
+      "mcica": {
+        "median": 6.561993333333334,
+        "min": 6.555347088888889,
+        "max": 6.5713927666666665
+      },
+      "speedup": 2.146391674006916
+    },
+    "200": {
+      "baseline": {
+        "median": 3.5028054444444443,
+        "min": 3.5001355444444444,
+        "max": 3.5119858777777777
+      },
+      "mcica": {
+        "median": 1.4238104444444444,
+        "min": 1.4233329,
+        "max": 1.4249048666666666
+      },
+      "speedup": 2.4601627682336615
+    },
+    "1024": {
+      "baseline": {
+        "median": 1.4362106555555556,
+        "min": 1.4358057666666666,
+        "max": 1.4367004444444444
+      },
+      "mcica": {
+        "median": 0.6779891111111112,
+        "min": 0.6774382,
+        "max": 0.6788862222222222
+      },
+      "speedup": 2.118338822878506
+    },
+    "4096": {
+      "baseline": {
+        "median": 0.9831075333333332,
+        "min": 0.9820283222222224,
+        "max": 0.9834687666666666
+      },
+      "mcica": {
+        "median": 0.5260422222222222,
+        "min": 0.5252555444444444,
+        "max": 0.5268299999999999
+      },
+      "speedup": 1.8688757133985865
+    }
+  },
+  "final_job": 37698436,
+  "final_matrix_status": "40/40 passed; subsequent profiler import failure retried separately",
+  "profile_retry_job": 37706174,
+  "profile_retry_status": "completed, CUDA-only trace and statistics",
+  "final_runs": 40,
+  "final_max_saved_error": 0.0,
+  "cpu_ctest_passed": 182
+}

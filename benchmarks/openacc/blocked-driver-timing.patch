@@ -1,0 +1,44 @@
+diff --git a/driver/ecrad_ifs_driver_blocked.F90 b/driver/ecrad_ifs_driver_blocked.F90
+index 7256974..2bb989c 100644
+--- a/driver/ecrad_ifs_driver_blocked.F90
++++ b/driver/ecrad_ifs_driver_blocked.F90
+@@ -75,0 +76,6 @@ program ecrad_ifs_driver
++#ifdef OMPGPU
++  use omp_lib, only : omp_is_initial_device
++#endif
++#ifdef _OPENACC
++  use openacc, only : acc_on_device, acc_device_host
++#endif
+@@ -139,0 +146,3 @@ program ecrad_ifs_driver
++  real(jprd) :: benchmark_elapsed
++  integer(kind=8) :: benchmark_clock_start, benchmark_clock_stop, benchmark_clock_rate
++  integer :: benchmark_on_device
+@@ -398,0 +408,15 @@ program ecrad_ifs_driver
++  benchmark_on_device = -1
++#ifdef OMPGPU
++  !$omp target map(from:benchmark_on_device)
++  benchmark_on_device = merge(0, 1, omp_is_initial_device())
++  !$omp end target
++#endif
++#ifdef _OPENACC
++  !$acc serial copyout(benchmark_on_device)
++  benchmark_on_device = merge(0, 1, acc_on_device(acc_device_host))
++  !$acc end serial
++#endif
++  write(nulout,'(a,i0)') 'BENCHMARK_GPU_EXECUTION ', benchmark_on_device
++#if defined(OMPGPU) || defined(_OPENACC)
++  if (benchmark_on_device /= 1) stop 2
++#endif
+@@ -399,0 +424,4 @@ program ecrad_ifs_driver
++    if (jrepeat == driver_config%nwarmup + 1) then
++      !$acc wait
++      call system_clock(benchmark_clock_start, benchmark_clock_rate)
++    end if
+@@ -551,0 +580,7 @@ program ecrad_ifs_driver
++  ! Common benchmark timer: finish all device work before stopping.
++  !$acc wait
++  call system_clock(benchmark_clock_stop)
++  benchmark_elapsed = real(benchmark_clock_stop-benchmark_clock_start,jprd)/real(benchmark_clock_rate,jprd)
++  write(nulout,'(a,es24.16)') 'BENCHMARK_WALL_SECONDS ', benchmark_elapsed
++  write(nulout,'(a,i0)') 'BENCHMARK_MEASURED_ITERATIONS ', driver_config%nrepeat-driver_config%nwarmup
++  write(nulout,'(a,i0)') 'BENCHMARK_COLUMNS ', ncol
