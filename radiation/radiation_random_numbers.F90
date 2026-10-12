@@ -46,7 +46,7 @@ module radiation_random_numbers
   implicit none
 
   public :: rng_type, IRngMinstdVector, IRngNative, initialize_acc, &
-    &  uniform_distribution_acc, IMinstdA0, IMinstdA, IMinstdM
+    &  uniform_distribution_acc, uniform_distribution_acc_gpoint, IMinstdA0, IMinstdA, IMinstdM
 
   enum, bind(c)
     enumerator IRngNative, &    ! Built-in Fortran-90 RNG
@@ -342,6 +342,21 @@ contains
     randnum = IMinstdScale * istate
 
   end function uniform_distribution_acc
+
+  ! Scalar spectral helpers backported from master-omp.
+  subroutine uniform_distribution_acc_gpoint(istate,randnum)
+
+    integer(kind=jpib), intent(inout) :: istate
+    real(kind=jprb), intent(out)   :: randnum
+
+    !$ACC ROUTINE SEQ
+
+    ! C++ minstd_rand algorithm
+    istate = mod(IMinstdA * istate, IMinstdM)
+    randnum = IMinstdScale * istate
+
+  end subroutine uniform_distribution_acc_gpoint
+
 
 
 end module radiation_random_numbers
