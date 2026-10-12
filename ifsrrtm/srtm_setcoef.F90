@@ -79,6 +79,22 @@ I_NLAYERS = KLEV
 !$ACC PARALLEL DEFAULT(NONE) PRESENT(PAVEL, PTAVEL, PCOLDRY, PWKL, KLAYTROP, PCOLCH4, PCOLCO2, PCOLH2O, PCOLMOL, &
 !$ACC   PCOLO2,PCOLO3, PFORFAC, PFORFRAC, KINDFOR, PSELFFAC, PSELFFRAC, KINDSELF, PFAC00, PFAC01, PFAC10, PFAC11, &
 !$ACC   KJP, KJT,KJT1, PRMU0) ASYNC(1)
+#ifdef _OPENACC
+!$ACC LOOP GANG VECTOR COLLAPSE(2)
+DO JK=1,KLEV
+  DO JL=KIDIA,KFDIA
+    PCOLMOL(JL,JK)=0.0_JPRB
+  ENDDO
+ENDDO
+!$ACC END PARALLEL
+!$ACC PARALLEL DEFAULT(NONE) PRESENT(PAVEL, PTAVEL, PCOLDRY, PWKL, KLAYTROP, PCOLCH4, PCOLCO2, PCOLH2O, PCOLMOL, &
+!$ACC   PCOLO2,PCOLO3, PFORFAC, PFORFRAC, KINDFOR, PSELFFAC, PSELFFRAC, KINDSELF, PFAC00, PFAC01, PFAC10, PFAC11, &
+!$ACC   KJP, KJT,KJT1, PRMU0) ASYNC(1)
+!$ACC LOOP GANG VECTOR COLLAPSE(2) &
+!$ACC& PRIVATE(Z_PLOG, Z_FP, Z_FT, Z_FT1, Z_WATER, Z_SCALEFAC, Z_FACTOR, Z_CO2REG, Z_COMPFP, JP1)
+DO JK=1,I_NLAYERS
+  DO JL=KIDIA,KFDIA
+#else
 !$ACC LOOP SEQ
 DO JK = 1, KLEV
   !$ACC LOOP GANG(STATIC:1) VECTOR
@@ -98,6 +114,7 @@ DO JK = 1, I_NLAYERS
   !$ACC LOOP GANG(STATIC:1) VECTOR &
   !$ACC   PRIVATE(Z_PLOG, Z_FP, Z_FT, Z_FT1, Z_WATER, Z_SCALEFAC, Z_FACTOR, Z_CO2REG, Z_COMPFP, JP1)
   DO JL = KIDIA, KFDIA
+#endif
     IF (PRMU0(JL) > 0.0_JPRB) THEN
       !        Find the two reference pressures on either side of the
       !        layer pressure.  Store them in JP and JP1.  Store in FP the
@@ -144,7 +161,9 @@ DO JK = 1, I_NLAYERS
       !        set of species interpolations.
 
       IF (Z_PLOG <= 4.56_JPRB) GO TO 5300
+#ifndef _OPENACC
       KLAYTROP(JL) =  KLAYTROP(JL) + 1
+#endif
 
       !        Set up factors needed to separately include the water vapor
       !        foreign-continuum in the calculation of absorption coefficient.
@@ -240,6 +259,20 @@ DO JK = 1, I_NLAYERS
   ENDDO
 ENDDO
 !$ACC END PARALLEL
+#ifdef _OPENACC
+! Night columns keep their existing LW tropopause, as in the original.
+!$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
+DO JL=KIDIA,KFDIA
+  IF (PRMU0(JL) > 0.0_JPRB) THEN
+    KLAYTROP(JL)=0
+    !$ACC LOOP SEQ
+    DO JK=1,KLEV
+      IF (LOG(PAVEL(JL,JK)) > 4.56_JPRB) KLAYTROP(JL)=KLAYTROP(JL)+1
+    ENDDO
+  ENDIF
+ENDDO
+#endif
+
 
 !----------------------------------------------------------------------- 
 IF (LHOOK) CALL DR_HOOK('SRTM_SETCOEF',1,ZHOOK_HANDLE)
