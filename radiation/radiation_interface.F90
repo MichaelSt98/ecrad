@@ -201,9 +201,9 @@ contains
   ! to reverse the order for the computation and then reverse the
   ! order of the output fluxes to match the inputs.
   subroutine radiation(ncol, nlev, istartcol, iendcol, config, &
-       &  single_level, thermodynamics, gas, cloud, aerosol, flux)
+       &  single_level, thermodynamics, gas, cloud, aerosol, flux, yd_sw_batch, kslot)
 
-    use parkind1,                 only : jprb
+    use parkind1,                 only : jprb, jpim
     use yomhook,                  only : lhook, dr_hook, jphook
 
     use radiation_io,             only : nulout, nulerr, radiation_abort
@@ -230,6 +230,7 @@ contains
     use radiation_homogeneous_sw, only : solver_homogeneous_sw
     use radiation_homogeneous_lw, only : solver_homogeneous_lw
     use radiation_save,           only : save_radiative_properties
+    use radiation_sw_batch_context_mod, only : sw_batch_context_type
 
     ! Treatment of gas and hydrometeor optics
     use radiation_monochromatic,  only : &
@@ -254,6 +255,8 @@ contains
     type(aerosol_type),       intent(in)   :: aerosol
     ! Output
     type(flux_type),          intent(inout):: flux
+    type(sw_batch_context_type), optional, intent(inout) :: yd_sw_batch
+    integer(kind=jpim), optional, intent(in) :: kslot
 
 
     ! Local variables
@@ -313,6 +316,13 @@ contains
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_interface:radiation',0,hook_handle)
+
+    if (present(yd_sw_batch)) then
+      if (.not. present(kslot)) then
+        write(nulerr,'(a)') 'Batch radiation requires a slot index'
+        call radiation_abort()
+      ENDIF
+    ENDIF
 
     !$ACC DATA CREATE(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
     !$ACC             od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, &
@@ -535,11 +545,17 @@ contains
 #endif
         else if (config%i_solver_sw == ISolverMcICAACC) then
           ! Compute fluxes using the McICA ACC shortwave solver
+          if (present(yd_sw_batch)) then
+            call yd_sw_batch%stage(kslot,istartcol,iendcol,single_level,cloud, &
+                 & od_sw,ssa_sw,g_sw,od_sw_cloud,ssa_sw_cloud,g_sw_cloud, &
+                 & sw_albedo_direct,sw_albedo_diffuse,incoming_sw)
+          else
           call solver_mcica_acc_sw(nlev,istartcol,iendcol, &
                &  config, single_level, cloud, &
                &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
                &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
-               &  incoming_sw, flux)
+                &  incoming_sw, flux)
+          ENDIF
         else if (config%i_solver_sw == ISolverSPARTACUS) then
           ! Compute fluxes using the SPARTACUS shortwave solver
           call solver_spartacus_sw(nlev,istartcol,iendcol, &
@@ -572,8 +588,10 @@ contains
 
       ! Store surface downwelling, and TOA, fluxes in bands from
       ! fluxes in g points
-      call flux%calc_surface_spectral(config, istartcol, iendcol)
-      call flux%calc_toa_spectral    (config, istartcol, iendcol)
+      if (.not. present(yd_sw_batch)) then
+        call flux%calc_surface_spectral(config, istartcol, iendcol)
+        call flux%calc_toa_spectral    (config, istartcol, iendcol)
+      ENDIF
 
     end if
 

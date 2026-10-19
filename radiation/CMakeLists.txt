@@ -55,6 +55,8 @@ set( radiation_SOURCES
         radiation_mcica_acc_sw.F90
         radiation_mcica_lw.F90
         radiation_mcica_sw.F90
+        radiation_mcica_sw_batch_mod.F90
+        radiation_sw_batch_context_mod.F90
         radiation_monochromatic.F90
         radiation_optical_depth_scaling.h
         radiation_overlap.F90

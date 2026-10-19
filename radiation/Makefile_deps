@@ -32,3 +32,6 @@ radiation_spectral_definition.o: radiation_constants.o
 radiation_thermodynamics.o: radiation_check.o radiation_constants.o
 radiation_tripleclouds_lw.o: radiation_adding_ica_lw.o radiation_cloud.o radiation_config.o radiation_flux.o radiation_lw_derivatives.o radiation_matrix.o radiation_overlap.o radiation_regions.o radiation_two_stream.o
 radiation_tripleclouds_sw.o: radiation_cloud.o radiation_config.o radiation_flux.o radiation_matrix.o radiation_overlap.o radiation_regions.o radiation_single_level.o radiation_two_stream.o
+radiation_mcica_sw_batch_mod.o: radiation_config.o radiation_two_stream.o radiation_adding_ica_sw.o radiation_cloud_cover.o radiation_random_numbers.o
+radiation_sw_batch_context_mod.o: radiation_config.o radiation_single_level.o radiation_thermodynamics.o radiation_gas.o radiation_cloud.o radiation_aerosol.o radiation_flux.o radiation_mcica_sw_batch_mod.o
+radiation_interface.o: radiation_sw_batch_context_mod.o
