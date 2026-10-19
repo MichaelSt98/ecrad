@@ -47,13 +47,13 @@ program ecrad_ifs_driver
   ! --------------------------------------------------------
   ! Section 1: Declarations
   ! --------------------------------------------------------
-  use parkind1,                 only : jprb, jprd ! Working/double precision
+  use parkind1,                 only : jprb, jprd, jpim, jpib ! Working/double precision
   use yomhook,                  only : dr_hook_init
 #ifdef HAVE_FIAT
   use mpl_module,               only : mpl_init, mpl_end
 #endif
 
-  use radiation_io,             only : nulout
+  use radiation_io,             only : nulout,radiation_abort
   use radiation_single_level,   only : single_level_type
   use radiation_thermodynamics, only : thermodynamics_type
   use radiation_gas,            only : gas_type, IMassMixingRatio, &
@@ -65,6 +65,7 @@ program ecrad_ifs_driver
   use radiation_save,           only : save_net_fluxes
   use radiation_setup,          only : tradiation, setup_radiation_scheme
   use radiation_constants,      only : Pi
+  use radiation_sw_batch_context_mod, only : sw_batch_context_type, radiation_block_state_type
   use ecrad_driver_config,      only : driver_config_type
   use ecrad_driver_read_input,  only : read_input
   use easy_netcdf
@@ -140,6 +141,12 @@ program ecrad_ifs_driver
 
   ! Loop index
   integer :: jrl, ibeg, iend, il, ib
+  type(sw_batch_context_type) :: sw_batch
+  type(radiation_block_state_type), allocatable, target :: block_states(:)
+  type(radiation_block_state_type), pointer :: block_state
+  integer(kind=jpim) :: batch_size,tile_start,tile_span,phase,phase_first,phase_last,slot,active
+  integer(kind=jpib) :: batch_tick0,batch_tick1,batch_rate
+  character(len=32) :: batch_argument
 
   ! If enabled, COPY_ASYNC stages copy in, compute and copy out of ZRGP
   ! in different streams, overlapping the copy-in of the next block with the
@@ -396,7 +403,36 @@ program ecrad_ifs_driver
 
   ! Option of repeating calculation multiple time for more accurate
   ! profiling
+  batch_size=0
+  call get_environment_variable('ECRAD_SW_BATCH_SIZE',batch_argument,status=istatus)
+  if (istatus == 0 .and. len_trim(batch_argument) > 0) read(batch_argument,*) batch_size
+#ifndef _OPENACC
+  if (batch_size /= 0) call radiation_abort()
+#endif
+  if (batch_size < 0) call radiation_abort()
+#ifdef COPY_ASYNC
+  if (batch_size > 0) call radiation_abort()
+#endif
+  tile_span=ncol
+  if (batch_size > 0) then
+    tile_span=batch_size*nproma
+    allocate(block_states(batch_size))
+    call sw_batch%init(nproma,nlev,batch_size,yradiation%rad_config)
+  ENDIF
+  !$acc enter data create(zrgp) if(batch_size > 0)
+#ifdef BITIDENTITY_TESTING
+  !$acc enter data copyin(iseed) if(batch_size > 0)
+#endif
   do jrepeat = 1,driver_config%nrepeat
+    !$acc wait
+    call system_clock(batch_tick0,batch_rate)
+    if (batch_size > 0) then
+      !$acc update device(zrgp(:,ifs_config%iinbeg:ifs_config%iinend,:), &
+      !$acc& zrgp(:,ifs_config%ioutend+1:ifs_config%ifldstot,:)) async(1)
+#ifdef BITIDENTITY_TESTING
+      !$acc update device(iseed) async(1)
+#endif
+    ENDIF
 #ifdef HAVE_NVTX
      call nvtxStartRange("ecrad_it")
 #endif
@@ -422,13 +458,30 @@ program ecrad_ifs_driver
 !    if (driver_config%do_parallel) then
       ! Run radiation scheme over blocks of columns in parallel
 
-      !$OMP PARALLEL DO SCHEDULE(DYNAMIC,1)&
-      !$OMP&PRIVATE(JRL,IBEG,IEND,IL,IB)
-      do jrl=1,ncol,nproma
+      do tile_start=1,ncol,tile_span
+      phase_first=0
+      phase_last=0
+      if (batch_size > 0) then
+        active=min(batch_size,(ncol-tile_start+nproma)/nproma)
+        call sw_batch%begin_tile(active)
+        phase_first=1
+        phase_last=2
+      ENDIF
+      do phase=phase_first,phase_last
+      if (phase == 2) call sw_batch%solve(yradiation%rad_config)
+      !$OMP PARALLEL DO SCHEDULE(DYNAMIC,1) IF(BATCH_SIZE == 0)&
+      !$OMP&PRIVATE(JRL,IBEG,IEND,IL,IB,SLOT,BLOCK_STATE)
+      do jrl=tile_start,min(ncol,tile_start+tile_span-1),nproma
         ibeg=jrl
         iend=min(ibeg+nproma-1,ncol)
         il=iend-ibeg+1
         ib=(jrl-1)/nproma+1
+        slot=1
+        nullify(block_state)
+        if (batch_size > 0) then
+          slot=(jrl-tile_start)/nproma+1
+          block_state=>block_states(slot)
+        ENDIF
 
         if (driver_config%iverbose >= 3) then
 #ifndef NO_OPENMP
@@ -454,15 +507,17 @@ program ecrad_ifs_driver
 
 #else  /* COPY_ASYNC */
 
-        !$acc data create(zrgp(:,:,ib)) &
+        !$acc enter data create(zrgp(:,:,ib)) &
 #ifdef BITIDENTITY_TESTING
         !$acc&     copyin(iseed(:,ib)) &
 #endif
-        !$acc&
+        !$acc& if(batch_size == 0)
 
+        if (batch_size == 0) then
         !$acc update device(zrgp(1:il,ifs_config%iinbeg:ifs_config%iinend,ib), &
         !$acc&            zrgp(1:il,ifs_config%ioutend+1:ifs_config%ifldstot,ib)) &
         !$acc& async(1)
+        ENDIF
 #endif /* COPY_ASYNC */
 
         ! Call the ECRAD radiation scheme
@@ -508,16 +563,31 @@ program ecrad_ifs_driver
              &  pcloud_overlap=zrgp(:,ifs_config%ioverlap,ib), &
              &  iseed=iseed(:,ib) &
 #endif
-             & )
+             & ,kphase=phase,ydblockstate=block_state,ydbatch=sw_batch,kslot=slot)
 #ifdef COPY_ASYNC
           !$acc update host(zrgp(:,ifs_config%ioutbeg:ifs_config%ioutend,ib)) async(3) wait(1)
           !$acc exit data delete(zrgp(:,:,ib)) async(3)
 #else
-          !$acc update host(zrgp(1:il,ifs_config%ioutbeg:ifs_config%ioutend,ib)) async(1)
-          !$acc end data
+          if (batch_size == 0) then
+            !$acc update host(zrgp(1:il,ifs_config%ioutbeg:ifs_config%ioutend,ib)) async(1)
+            !$acc exit data delete(zrgp(:,:,ib)) &
+#ifdef BITIDENTITY_TESTING
+            !$acc& delete(iseed(:,ib)) &
+#endif
+            !$acc& async(1)
+          ENDIF
 #endif
       end do
       !$OMP END PARALLEL DO
+      ENDDO ! phases
+      ENDDO ! tiles
+      if (batch_size > 0) then
+        !$acc update host(zrgp(:,ifs_config%ioutbeg:ifs_config%ioutend,:)) async(1)
+      ENDIF
+      !$acc wait
+      call system_clock(batch_tick1)
+      write(nulout,'(a,2i6,es24.16)') 'BATCH_ITER ',batch_size,jrepeat, &
+        & real(batch_tick1-batch_tick0,jprd)/real(batch_rate,jprd)
 
 !    else
       ! Run radiation scheme serially
@@ -537,6 +607,11 @@ program ecrad_ifs_driver
   end do
 
 !$acc wait
+  call sw_batch%release()
+  !$acc exit data delete(zrgp) if(batch_size > 0)
+#ifdef BITIDENTITY_TESTING
+  !$acc exit data delete(iseed) if(batch_size > 0)
+#endif
 
 #ifndef NO_OPENMP
   if (driver_config%nrepeat > driver_config%nwarmup) then

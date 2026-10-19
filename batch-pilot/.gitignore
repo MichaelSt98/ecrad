@@ -2,3 +2,6 @@
 /job-*.log
 /perf-job-*.log
 /perf-sp-*/
+/integration-*/
+/integration-job-*.log
+/integration-dp-job-*.log

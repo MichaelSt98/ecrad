@@ -132,13 +132,10 @@ exact RNG final states/draw counts or real-input/full-application equivalence.
 
 ## Remaining gates
 
-1. Complete device correctness, including any compiler-sensitive bounds.
-2. Capture real solver inputs and directly compare cloud samples/RNG traversal.
-3. Establish matched K=1/K>1 solver timings and memory/register/launch profiles.
-4. Integrate the batched caller and include preparation/staging/transfers in a
-   B32 full-input comparison before making any end-to-end performance claim.
-5. Support the other delta-scaling mode and optional diagnostics, then extend
-   to LW and other preparation kernels after the performance gates pass.
+The real-input solver benchmark and first full-call integration are complete;
+their evidence is linked below. Remaining work includes direct sample/RNG
+instrumentation, other delta-scaling/diagnostic configurations, full-caller
+profiling and memory measurements, and extension to LW and blocked preparation.
 
 This is an isolated experimental pilot, not yet selected by a production driver.
 
@@ -196,10 +193,20 @@ Job **30101373** completed successfully. Read
 results and integration recommendation. Resident solver replay improved from
 0.779595 s to 0.139473 s at K=32; host-staging-inclusive replay improved from
 1.571862 s to 0.763569 s at K=16. All 400 confirmation iterations had zero flux
-error. Full-radiation timing and direct RNG-state/draw-count validation remain
-open. Reproduce the audit with:
+error. This solver-only experiment did not measure full radiation; the later
+integration is described below. Direct RNG-state/draw-count validation remains
+open. Reproduce the solver audit with:
 
 ```bash
 python3 -B ci-debug/block-batch-sw/batch-pilot/analyse_sp_perf.py \
   ci-debug/block-batch-sw/batch-pilot/perf-sp-30101373
 ```
+
+### Full-radiation integration
+
+The subsequent blocked caller is implemented and validated. See
+[INTEGRATION_RESULTS.md](INTEGRATION_RESULTS.md) and
+[../OPENACC_BLOCK_BATCH.md](../OPENACC_BLOCK_BATCH.md).
+SP job 30116862 measured 19.879% lower full-radiation B32 time at K=32 against
+the pristine common parent 2be60a2; DP correctness job 30120707 passed. That
+baseline differs from the later five-band reference used for solver replay.
