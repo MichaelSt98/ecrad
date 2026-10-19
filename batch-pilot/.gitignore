@@ -1,0 +1,4 @@
+/build-*/
+/job-*.log
+/perf-job-*.log
+/perf-sp-*/
