@@ -20,6 +20,13 @@ if( HAVE_ACC )
     # NVHPC searches its output directory before dependency module paths.
     set_target_properties( ecrad_${PREC}_acc_rng_compatibility PROPERTIES
         Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rng-module" )
+    ecbuild_add_test(
+        TARGET ecrad_${PREC}_acc_gas_metadata
+        SOURCES acc_gas_metadata.F90
+        LIBS ecrad.${PREC} ecrad_base.${PREC}
+    )
+    set_target_properties( ecrad_${PREC}_acc_gas_metadata PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gas-metadata-module" )
 endif()
 
 # Create symbolic link to test data
