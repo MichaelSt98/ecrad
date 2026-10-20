@@ -48,7 +48,10 @@ program ecrad_ifs_driver
   ! Section 1: Declarations
   ! --------------------------------------------------------
   use parkind1,                 only : jprb, jprd, jpim, jpib ! Working/double precision
-  use yomhook,                  only : dr_hook_init
+  use yomhook,                  only : dr_hook_init, lhook, dr_hook, jphook
+#if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+  use iso_c_binding,            only : c_int
+#endif
 #ifdef HAVE_FIAT
   use mpl_module,               only : mpl_init, mpl_end
 #endif
@@ -144,7 +147,26 @@ program ecrad_ifs_driver
   type(sw_batch_context_type) :: sw_batch
   type(radiation_block_state_type), allocatable, target :: block_states(:)
   type(radiation_block_state_type), pointer :: block_state
-  integer(kind=jpim) :: batch_size,tile_start,tile_span,phase,phase_first,phase_last,slot,active
+  integer(kind=jpim) :: batch_size,tile_start,tile_span,phase,slot,active
+  integer(kind=jpim) :: phase_index,phase_count,phase_order(3),profile_bucket
+  integer(kind=jpim) :: full_batch_size,full_width,full_active,jfield,jblock,jcolumn,first_block
+  real(kind=jprb), allocatable :: full_fields(:,:)
+  integer(kind=jpim), allocatable :: full_seed(:)
+  logical :: resident_fields
+#if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+  logical :: capture_iteration
+  integer(kind=c_int) :: capture_status
+  INTERFACE
+    FUNCTION CUDA_PROFILER_START() BIND(C,NAME='cudaProfilerStart') RESULT(KSTATUS)
+      IMPORT :: C_INT
+      INTEGER(KIND=C_INT) :: KSTATUS
+    END FUNCTION CUDA_PROFILER_START
+    FUNCTION CUDA_PROFILER_STOP() BIND(C,NAME='cudaProfilerStop') RESULT(KSTATUS)
+      IMPORT :: C_INT
+      INTEGER(KIND=C_INT) :: KSTATUS
+    END FUNCTION CUDA_PROFILER_STOP
+  END INTERFACE
+#endif
   integer(kind=jpib) :: batch_tick0,batch_tick1,batch_rate
   character(len=32) :: batch_argument
 
@@ -233,6 +255,9 @@ program ecrad_ifs_driver
   ! Setup the radiation scheme: load the coefficients for gas and
   ! cloud optics, currently from RRTMG
   call setup_radiation_scheme(yradiation, .true., file_name=file_name)
+  ! The offline namelist can override the model default during setup. Keep the
+  ! caller's output request consistent with the arrays allocated by ecRad.
+  yradiation%yrerad%lapproxlwupdate=yradiation%rad_config%do_lw_derivatives
   ! Or call without specifying the namelist filename, in which case
   ! the default settings are from yoerad.F90
   !call setup_radiation_scheme(yradiation, .true.)
@@ -358,7 +383,7 @@ program ecrad_ifs_driver
   flux%lw_dn_surf_canopy(:,:) = 0._jprb
   flux%sw_dn_diffuse_surf_canopy(:,:) = 0._jprb
   flux%sw_dn_direct_surf_canopy(:,:) = 0._jprb
-  flux%lw_derivatives(:,:) = 0._jprb
+  if (allocated(flux%lw_derivatives)) flux%lw_derivatives(:,:) = 0._jprb
 
   ! Allocate memory for additional arrays
   allocate(ccn_land(ncol))
@@ -404,29 +429,70 @@ program ecrad_ifs_driver
   ! Option of repeating calculation multiple time for more accurate
   ! profiling
   batch_size=0
+  full_batch_size=0
   call get_environment_variable('ECRAD_SW_BATCH_SIZE',batch_argument,status=istatus)
   if (istatus == 0 .and. len_trim(batch_argument) > 0) read(batch_argument,*) batch_size
+  call get_environment_variable('ECRAD_FULL_BATCH_SIZE',batch_argument,status=istatus)
+  if (istatus == 0 .and. len_trim(batch_argument) > 0) read(batch_argument,*) full_batch_size
+  if (full_batch_size > 0) batch_size=0
 #ifndef _OPENACC
-  if (batch_size /= 0) call radiation_abort()
+  if (batch_size /= 0 .or. full_batch_size /= 0) call radiation_abort()
 #endif
-  if (batch_size < 0) call radiation_abort()
+  if (batch_size < 0 .or. full_batch_size < 0) call radiation_abort()
 #ifdef COPY_ASYNC
-  if (batch_size > 0) call radiation_abort()
+  if (batch_size > 0 .or. full_batch_size > 0) call radiation_abort()
+#endif
+  resident_fields=batch_size > 0 .or. full_batch_size > 0
+#if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+  capture_iteration=.false.
+  call get_environment_variable('ECRAD_NSYS_CAPTURE',batch_argument,status=istatus)
+  if (istatus == 0) capture_iteration=trim(batch_argument) == '1'
 #endif
   tile_span=ncol
   if (batch_size > 0) then
     tile_span=batch_size*nproma
     allocate(block_states(batch_size))
     call sw_batch%init(nproma,nlev,batch_size,yradiation%rad_config)
+    call get_environment_variable('ECRAD_BATCH_PROFILE',batch_argument,status=istatus)
+    if (istatus == 0) sw_batch%profile=trim(batch_argument) == '1'
+    call get_environment_variable('ECRAD_LW_BATCH',batch_argument,status=istatus)
+    if (istatus == 0 .and. trim(batch_argument) == '1') call sw_batch%init_lw(yradiation%rad_config)
+    call get_environment_variable('ECRAD_GAS_BATCH',batch_argument,status=istatus)
+    if (istatus == 0 .and. trim(batch_argument) == '1') then
+      allocate(sw_batch%gas_tile)
+      call sw_batch%gas_tile%init(nproma,nlev,batch_size,yradiation%yrerad%nsw, &
+        & yradiation%yrerad%nlwemiss,yradiation%rad_config)
+      sw_batch%gas_tile%profile=sw_batch%profile
+    ENDIF
   ENDIF
-  !$acc enter data create(zrgp) if(batch_size > 0)
+  if (full_batch_size > 0) then
+    full_width=full_batch_size*nproma
+    write(nulout,'(a,3i8)') 'FULL_BATCH_LAYOUT ',nproma,full_width,ncol
+    allocate(full_fields(full_width,ifs_config%ifldstot))
+    !$acc enter data copyin(ifs_config)
+    !$acc enter data create(full_fields)
+    allocate(full_seed(full_width))
+    !$acc enter data create(full_seed)
+    call get_environment_variable('ECRAD_BATCH_PROFILE',batch_argument,status=istatus)
+    if (istatus == 0) sw_batch%profile=trim(batch_argument) == '1'
+  ENDIF
+  !$acc enter data create(zrgp) if(resident_fields)
 #ifdef BITIDENTITY_TESTING
-  !$acc enter data copyin(iseed) if(batch_size > 0)
+  !$acc enter data copyin(iseed) if(resident_fields)
 #endif
   do jrepeat = 1,driver_config%nrepeat
     !$acc wait
+#if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+    if (capture_iteration .and. jrepeat == 2) then
+      capture_status=cuda_profiler_start()
+      if (capture_status /= 0) call radiation_abort()
+    ENDIF
+#endif
     call system_clock(batch_tick0,batch_rate)
-    if (batch_size > 0) then
+    sw_batch%times(:)=0.0_jprd
+    if (allocated(sw_batch%gas_tile)) sw_batch%gas_tile%times(:)=0.0_jprd
+    if (sw_batch%profile) call sw_batch%profile_mark(8,.true.)
+    if (resident_fields) then
       !$acc update device(zrgp(:,ifs_config%iinbeg:ifs_config%iinend,:), &
       !$acc& zrgp(:,ifs_config%ioutend+1:ifs_config%ifldstot,:)) async(1)
 #ifdef BITIDENTITY_TESTING
@@ -436,6 +502,7 @@ program ecrad_ifs_driver
 #ifdef HAVE_NVTX
      call nvtxStartRange("ecrad_it")
 #endif
+    if (sw_batch%profile) call sw_batch%profile_mark(8,.false.)
 
 #ifdef COPY_ASYNC
     !$acc enter data create(zrgp(:,:,1)) &
@@ -458,17 +525,78 @@ program ecrad_ifs_driver
 !    if (driver_config%do_parallel) then
       ! Run radiation scheme over blocks of columns in parallel
 
+      if (full_batch_size > 0) then
+        do tile_start=1,ncol,full_width
+          full_active=min(full_width,ncol-tile_start+1)
+          active=(full_active+nproma-1)/nproma
+          first_block=(tile_start-1)/nproma+1
+          if (sw_batch%profile) call sw_batch%profile_mark(1,.true.)
+          ! Preserve the model's (NPROMA,field,block) layout. A bounded device
+          ! transpose exposes all active blocks to every physics stage.
+          !$acc parallel loop collapse(3) gang vector default(present) async(1)
+          do jblock=1,active
+            do jfield=1,ifs_config%ifldstot
+              do jcolumn=1,nproma
+                if ((jblock-1)*nproma+jcolumn <= full_active) then
+                  if (jfield <= ifs_config%iinend .or. jfield > ifs_config%ioutend) then
+                    full_fields((jblock-1)*nproma+jcolumn,jfield)=zrgp(jcolumn,jfield,first_block+jblock-1)
+                  else
+                    full_fields((jblock-1)*nproma+jcolumn,jfield)=0.0_jprb
+                  ENDIF
+                ENDIF
+              ENDDO
+            ENDDO
+          ENDDO
+          !$acc parallel loop collapse(2) gang vector default(present) async(1)
+          do jblock=1,active
+            do jcolumn=1,nproma
+#ifdef BITIDENTITY_TESTING
+              if ((jblock-1)*nproma+jcolumn <= full_active) &
+                & full_seed((jblock-1)*nproma+jcolumn)=iseed(jcolumn,first_block+jblock-1)
+#else
+              ! Match init_seed_simple in each original logical block.
+              if ((jblock-1)*nproma+jcolumn <= full_active) &
+                & full_seed((jblock-1)*nproma+jcolumn)=jcolumn
+#endif
+            ENDDO
+          ENDDO
+          if (sw_batch%profile) call sw_batch%profile_mark(1,.false.)
+          if (sw_batch%profile) call sw_batch%profile_mark(2,.true.)
+          call run_radiation_view(full_width,full_active,full_fields,full_seed)
+          if (sw_batch%profile) call sw_batch%profile_mark(2,.false.)
+          if (sw_batch%profile) call sw_batch%profile_mark(3,.true.)
+          !$acc parallel loop collapse(3) gang vector default(present) async(1)
+          do jblock=1,active
+            do jfield=ifs_config%ioutbeg,ifs_config%ioutend
+              do jcolumn=1,nproma
+                if ((jblock-1)*nproma+jcolumn <= full_active) &
+                  & zrgp(jcolumn,jfield,first_block+jblock-1)=full_fields((jblock-1)*nproma+jcolumn,jfield)
+              ENDDO
+            ENDDO
+          ENDDO
+          if (sw_batch%profile) call sw_batch%profile_mark(3,.false.)
+        ENDDO
+      else
       do tile_start=1,ncol,tile_span
-      phase_first=0
-      phase_last=0
+      phase_order(:)=0
+      phase_count=1
       if (batch_size > 0) then
         active=min(batch_size,(ncol-tile_start+nproma)/nproma)
         call sw_batch%begin_tile(active)
-        phase_first=1
-        phase_last=2
+        phase_order(1:2)=[1,2]
+        phase_count=2
+        if (allocated(sw_batch%gas_tile)) then
+          phase_order(:)=[3,4,2]
+          phase_count=3
+        ENDIF
       ENDIF
-      do phase=phase_first,phase_last
-      if (phase == 2) call sw_batch%solve(yradiation%rad_config)
+      do phase_index=1,phase_count
+       phase=phase_order(phase_index)
+       if (phase == 4) call sw_batch%gas_tile%solve(yradiation%rad_config)
+       if (phase == 2) call sw_batch%solve(yradiation%rad_config)
+       profile_bucket=6
+       if (phase == 2) profile_bucket=7
+       if (sw_batch%profile) call sw_batch%profile_mark(profile_bucket,.true.)
       !$OMP PARALLEL DO SCHEDULE(DYNAMIC,1) IF(BATCH_SIZE == 0)&
       !$OMP&PRIVATE(JRL,IBEG,IEND,IL,IB,SLOT,BLOCK_STATE)
       do jrl=tile_start,min(ncol,tile_start+tile_span-1),nproma
@@ -579,15 +707,29 @@ program ecrad_ifs_driver
 #endif
       end do
       !$OMP END PARALLEL DO
+      if (sw_batch%profile) call sw_batch%profile_mark(profile_bucket,.false.)
       ENDDO ! phases
       ENDDO ! tiles
-      if (batch_size > 0) then
+      ENDIF ! full tile or staged continuation
+      if (resident_fields) then
+        if (sw_batch%profile) call sw_batch%profile_mark(8,.true.)
         !$acc update host(zrgp(:,ifs_config%ioutbeg:ifs_config%ioutend,:)) async(1)
+        if (sw_batch%profile) call sw_batch%profile_mark(8,.false.)
       ENDIF
       !$acc wait
       call system_clock(batch_tick1)
       write(nulout,'(a,2i6,es24.16)') 'BATCH_ITER ',batch_size,jrepeat, &
         & real(batch_tick1-batch_tick0,jprd)/real(batch_rate,jprd)
+      if (full_batch_size > 0 .and. sw_batch%profile) &
+        & write(nulout,'(a,i6,4es24.16)') 'FULL_PHASE ',jrepeat,sw_batch%times(1:3),sw_batch%times(8)
+      if (allocated(sw_batch%gas_tile)) sw_batch%times(12:14)=sw_batch%gas_tile%times(:)
+      if (sw_batch%profile) write(nulout,'(a,i6,14es24.16)') 'BATCH_PHASE ',jrepeat,sw_batch%times
+#if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+      if (capture_iteration .and. jrepeat == 2) then
+        capture_status=cuda_profiler_stop()
+        if (capture_status /= 0) call radiation_abort()
+      ENDIF
+#endif
 
 !    else
       ! Run radiation scheme serially
@@ -608,10 +750,17 @@ program ecrad_ifs_driver
 
 !$acc wait
   call sw_batch%release()
-  !$acc exit data delete(zrgp) if(batch_size > 0)
+  !$acc exit data delete(zrgp) if(resident_fields)
 #ifdef BITIDENTITY_TESTING
-  !$acc exit data delete(iseed) if(batch_size > 0)
+  !$acc exit data delete(iseed) if(resident_fields)
 #endif
+  if (full_batch_size > 0) then
+    !$acc exit data delete(ifs_config)
+    !$acc exit data delete(full_fields)
+    deallocate(full_fields)
+    !$acc exit data delete(full_seed)
+    deallocate(full_seed)
+  ENDIF
 
 #ifndef NO_OPENMP
   if (driver_config%nrepeat > driver_config%nwarmup) then
@@ -676,4 +825,43 @@ program ecrad_ifs_driver
   call mpl_end(ldmeminfo=.false.)
 #endif
 
-end program ecrad_ifs_driver
+CONTAINS
+SUBROUTINE RUN_RADIATION_VIEW(KCOL,KEND,PFIELDS,KSEED)
+  INTEGER(KIND=JPIM), INTENT(IN) :: KCOL,KEND
+  REAL(KIND=JPRB), INTENT(INOUT) :: PFIELDS(KCOL,IFS_CONFIG%IFLDSTOT)
+  INTEGER(KIND=JPIM), INTENT(IN) :: KSEED(KCOL)
+  REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
+  IF (LHOOK) CALL DR_HOOK('ECRAD_IFS_DRIVER%RUN_RADIATION_VIEW',0,ZHOOK_HANDLE)
+  CALL RADIATION_SCHEME(YRADIATION,1,KEND,KCOL,NLEV,SIZE(AEROSOL%MIXING_RATIO,3), &
+    & SINGLE_LEVEL%SOLAR_IRRADIANCE, &
+    & PFIELDS(:,IFS_CONFIG%IAMU0),PFIELDS(:,IFS_CONFIG%ITS), &
+    & PFIELDS(:,IFS_CONFIG%IALD),PFIELDS(:,IFS_CONFIG%IALP),PFIELDS(:,IFS_CONFIG%IEMISS), &
+    & PFIELDS(:,IFS_CONFIG%ICCNL),PFIELDS(:,IFS_CONFIG%ICCNO), &
+    & PFIELDS(:,IFS_CONFIG%IGELAM),PFIELDS(:,IFS_CONFIG%IGEMU),PFIELDS(:,IFS_CONFIG%ISLM), &
+    & PFIELDS(:,IFS_CONFIG%IPR),PFIELDS(:,IFS_CONFIG%ITI), &
+    & PFIELDS(:,IFS_CONFIG%IAPRS),PFIELDS(:,IFS_CONFIG%IHTI), &
+    & PFIELDS(:,IFS_CONFIG%IWV),PFIELDS(:,IFS_CONFIG%IICO2), &
+    & PFIELDS(:,IFS_CONFIG%IICH4),PFIELDS(:,IFS_CONFIG%IIN2O), &
+    & PFIELDS(:,IFS_CONFIG%INO2),PFIELDS(:,IFS_CONFIG%IC11), &
+    & PFIELDS(:,IFS_CONFIG%IC12),PFIELDS(:,IFS_CONFIG%IC22), &
+    & PFIELDS(:,IFS_CONFIG%ICL4),PFIELDS(:,IFS_CONFIG%IOZ), &
+    & PFIELDS(:,IFS_CONFIG%ICLC),PFIELDS(:,IFS_CONFIG%ILWA), &
+    & PFIELDS(:,IFS_CONFIG%IIWA),PFIELDS(:,IFS_CONFIG%IRWA),PFIELDS(:,IFS_CONFIG%ISWA), &
+    & PFIELDS(:,IFS_CONFIG%IAER),PFIELDS(:,IFS_CONFIG%IAERO), &
+    & PFIELDS(:,IFS_CONFIG%IFRSO),PFIELDS(:,IFS_CONFIG%IFRTH), &
+    & PFIELDS(:,IFS_CONFIG%ISWFC),PFIELDS(:,IFS_CONFIG%ILWFC), &
+    & PFIELDS(:,IFS_CONFIG%IFRSOD),PFIELDS(:,IFS_CONFIG%IFRTED), &
+    & PFIELDS(:,IFS_CONFIG%IFRSODC),PFIELDS(:,IFS_CONFIG%IFRTEDC), &
+    & PFIELDS(:,IFS_CONFIG%IFDIR),PFIELDS(:,IFS_CONFIG%ICDIR),PFIELDS(:,IFS_CONFIG%ISUDU), &
+    & PFIELDS(:,IFS_CONFIG%IUVDF),PFIELDS(:,IFS_CONFIG%IPARF), &
+    & PFIELDS(:,IFS_CONFIG%IPARCF),PFIELDS(:,IFS_CONFIG%ITINCF), &
+    & PFIELDS(:,IFS_CONFIG%IEMIT),PFIELDS(:,IFS_CONFIG%ILWDERIVATIVE), &
+    & PFIELDS(:,IFS_CONFIG%ISWDIFFUSEBAND),PFIELDS(:,IFS_CONFIG%ISWDIRECTBAND) &
+#ifdef BITIDENTITY_TESTING
+    & ,PRE_LIQ=PFIELDS(:,IFS_CONFIG%IRE_LIQ),PRE_ICE=PFIELDS(:,IFS_CONFIG%IRE_ICE), &
+    & PCLOUD_OVERLAP=PFIELDS(:,IFS_CONFIG%IOVERLAP) &
+#endif
+    & ,ISEED=KSEED)
+  IF (LHOOK) CALL DR_HOOK('ECRAD_IFS_DRIVER%RUN_RADIATION_VIEW',1,ZHOOK_HANDLE)
+END SUBROUTINE RUN_RADIATION_VIEW
+END PROGRAM ECRAD_IFS_DRIVER

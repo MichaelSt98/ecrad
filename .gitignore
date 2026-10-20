@@ -12,3 +12,4 @@ config_*.nam
 /bin/ecrad
 /bin/ecrad_ifs
 /bin/ecrad_ifs_blocked
+/ecsbatch.log.*

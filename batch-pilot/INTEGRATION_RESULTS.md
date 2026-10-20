@@ -49,12 +49,14 @@ physics call tree. LW and preparation have not yet been made block-parallel.
 
 ## Correctness
 
-- SP full-domain and 65-column partial-block cases: candidate K=0/1/16/32 all
-  match the parent with **zero saved-output differences**.
+- SP full-domain and requested 65-column controls: candidate K=0/1/16/32 all
+  match the parent with **zero saved-output differences**. The blocked loop
+  ignored the requested range, so both controls processed the full input.
+  Real truncated-input partial validation was subsequently added in job 30136159.
 - All 25 timed SP process outputs match the reference with **zero differences**.
   Outputs are checked after each process, not separately after every iteration.
-- DP job **30120707**, completed 00:05:28, exit 0: the same full-domain/partial
-  cases and K=0/1/16/32 have **zero saved-output differences**. No DP performance
+- DP job **30120707**, completed 00:05:28, exit 0: the same full-domain/requested-range
+  controls and K=0/1/16/32 have **zero saved-output differences**. No DP performance
   conclusion is drawn.
 - SP GPU CTest: 13/13 pass for each baseline/candidate build.
 - DP GPU CTest: 13/13 pass for each baseline/candidate build.

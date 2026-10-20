@@ -32,6 +32,7 @@ set( radiation_SOURCES
         radiation_flux.F90
         radiation_gas_constants.F90
         radiation_gas.F90
+        radiation_gas_batch_context_mod.F90
         radiation_general_cloud_optics_data.F90
         radiation_general_cloud_optics.F90
         radiation_homogeneous_lw.F90

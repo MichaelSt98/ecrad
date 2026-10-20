@@ -144,7 +144,9 @@ subroutine ifs_setup_indices (driver_config, ifs_config, yradiation, nlev)
   ifs_config%ifdir  =indrad(inext,1,.true.)
   ifs_config%ifdif  =indrad(inext,1,.true.)
   ifs_config%icdir  =indrad(inext,1,.true.)
-  ifs_config%ilwderivative =indrad(inext,nlev+1, yradiation%yrerad%lapproxlwupdate)
+  ! RADIATION_SCHEME has a mandatory derivative dummy in its PRESENT region,
+  ! including when derivatives are disabled. Reserve valid backing storage.
+  ifs_config%ilwderivative =indrad(inext,nlev+1,.true.)
   ifs_config%iswdirectband =indrad(inext,yradiation%yrerad%nsw,yradiation%yrerad%lapproxswupdate)
   ifs_config%iswdiffuseband=indrad(inext,yradiation%yrerad%nsw,yradiation%yrerad%lapproxswupdate)
   ifs_config%ifrso  =indrad(inext,nlev+1,.true.)
@@ -557,11 +559,13 @@ subroutine ifs_copy_fluxes_from_blocked(&
         flux%lw_up(ibeg:iend,jlev) = zrgp(1:il,ifs_config%ifrth+jlev-1,ib)
         flux%sw_up_clear(ibeg:iend,jlev) = zrgp(1:il,ifs_config%iswfc+jlev-1,ib)
         flux%lw_up_clear(ibeg:iend,jlev) = zrgp(1:il,ifs_config%ilwfc+jlev-1,ib)
-        if (yradiation%yrerad%lapproxlwupdate) then
-          flux%lw_derivatives(ibeg:iend,jlev) = zrgp(1:il,ifs_config%ilwderivative+jlev-1,ib)
-        else
-          flux%lw_derivatives(ibeg:iend,jlev) = 0.0_jprb
-        endif
+        if (allocated(flux%lw_derivatives)) then
+          if (yradiation%yrerad%lapproxlwupdate) then
+            flux%lw_derivatives(ibeg:iend,jlev) = zrgp(1:il,ifs_config%ilwderivative+jlev-1,ib)
+          else
+            flux%lw_derivatives(ibeg:iend,jlev) = 0.0_jprb
+          ENDIF
+        ENDIF
       end do
       flux%sw_dn(ibeg:iend,nlev+1) = zrgp(1:il,ifs_config%ifrsod,ib)
       flux%lw_dn(ibeg:iend,nlev+1) = zrgp(1:il,ifs_config%ifrted,ib)

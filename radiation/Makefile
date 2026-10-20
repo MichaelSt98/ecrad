@@ -14,7 +14,7 @@ SOURCES = radiation_aerosol.F90 radiation_config.F90 \
 	radiation_mcica_sw.F90	radiation_cloud_generator.F90 \
 	radiation_mcica_lw.F90	radiation_cloud_generator_acc.F90	radiation_adding_ica_lw.F90 \
 	radiation_mcica_acc_sw.F90	radiation_mcica_acc_lw.F90 \
-        radiation_mcica_sw_batch_mod.F90 radiation_sw_batch_context_mod.F90 \
+        radiation_mcica_sw_batch_mod.F90 radiation_gas_batch_context_mod.F90 radiation_sw_batch_context_mod.F90 \
 	radiation_homogeneous_sw.F90 radiation_homogeneous_lw.F90 \
 	radiation_ice_optics_fu.F90 radiation_ice_optics_baran.F90 \
 	radiation_ice_optics_baran2017.F90 radiation_ice_optics_yi.F90 \

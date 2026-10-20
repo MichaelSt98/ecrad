@@ -28,9 +28,14 @@ numbers, not full-radiation timings. Job: 30101373.
 
 The first integrated SP B32 measurement passes its performance gate: **4.182815 s
 parent -> 3.351296 s at K=32 (19.879% reduction)**. K=16 reduces time by 19.567%.
-SP/DP full-domain and partial-block checks have zero saved-output differences;
+SP/DP full-domain checks have zero saved-output differences;
 182 CPU tests and both precision-specific GPU regression suites pass. See
 [batch-pilot/INTEGRATION_RESULTS.md](batch-pilot/INTEGRATION_RESULTS.md).
+
+The original requested 65-column controls did not truncate the blocked driver.
+Actual truncated-input validation now passes in phase job 30136159. Current SP
+lineage, phase costs and subsequent LW tile milestones are recorded in
+[`sp_bench_versions.md`](sp_bench_versions.md) in this branch.
 
 `radiation_sw_batch_context_mod.F90` owns the device-resident input tile,
 SW solver workspace and output buffers. It also defines retained physical
@@ -63,6 +68,103 @@ per block. The end-state is a CLOUDSC-style blocked GPU call tree with the
 appropriate column/layer/g-point mapping at each stage, not a host block loop
 launching the complete pipeline for every block.
 
+### Optional bounded LW continuation
+
+The next measured milestone stages LW optics, Planck functions, cloud fields
+and original seeds on device and invokes the existing intrinsic-array LW core
+over a contiguous K×NPROMA tile. Finishing scatters LW before spectral diagnostics.
+Enable both continuations with:
+
+```bash
+export ECRAD_SW_BATCH_SIZE=32
+export ECRAD_LW_BATCH=1
+```
+
+Job 30140239 reduces matched SP full-call time from 3.302355 to 2.779014 s
+(15.848%); K16 reduces it by 14.958%. Both win all five matched process pairs.
+SP/DP full and actually truncated 65-column inputs have zero saved-output
+differences. Both GPU suites pass 13/13 and rebuilt CPU DP+SP passes 182/182.
+First failed derivative checks are retained; late-initialized LW owner flags
+must be updated on device before scatter. Optional derivative output uses its
+own contiguous allocation.
+
+Initial LW support requires McICA ACC, cloud scattering enabled, aerosol LW
+scattering disabled and clear-sky diagnostics. The bridge keeps logical NPROMA=32
+but does not yet expose an explicit LW block dimension or persistent internal
+solver scratch. Profiled SW staging/solve/scatter costs only ~0.19 s; the old
+per-block LW cost is ~0.667 s and optics remains ~1.65 s. The next major target
+is blocked preparation/optics. `ECRAD_BATCH_PROFILE=1` enables separate
+synchronized diagnostic buckets; leave it unset for headline timings.
+
+### Optional bounded gas-optics continuation
+
+`ECRAD_GAS_BATCH=1` adds phases 3 (prepare physical inputs and stage gas fields)
+and 4 (resume cloud/aerosol optics using tile gas results). One RRTMG/albedo call
+per tile replaces one per logical block; LW/SW solve/finish remains phase 2.
+The resident tile is owned by `radiation_gas_batch_context_mod.F90`; logical
+NPROMA and original solver seeds remain unchanged.
+
+```bash
+export ECRAD_SW_BATCH_SIZE=32 ECRAD_LW_BATCH=1 ECRAD_GAS_BATCH=1
+```
+
+Job 30153332 measures **2.827999 -> 1.459260 s (48.400% reduction)** against
+the matched LW+SW-only control; all five process pairs improve. K16 improves
+by 45.961%. SP/DP full-domain and mixed-day/night partial tests have zero saved
+output differences; GPU suites pass 13/13 each and native CPU DP/SP 182/182.
+These are GPU-parent validation results; the recorded large-input CPU/GPU SP
+discrepancy remains an independent open issue.
+
+Initial gas support requires RRTMG in both spectra, simple surfaces,
+half-level thermodynamics and no spectral solar scaling. The current bridge
+uses a contiguous tile view and retains per-call RRTMG internal scratch.
+Remaining preparation/finishing costs ~0.831 s and cloud/aerosol optics ~0.118 s
+in the separate K32 diagnostic run; these are the next block-port targets.
+
+### Full-pipeline execution tile
+
+The full-tile path gathers model fields `(NPROMA,field,block)` on device into a
+bounded contiguous compute tile, executes preparation, all optics, solvers,
+spectral diagnostics and finishing for that tile, then scatters outputs to the
+unchanged model layout. Model NPROMA stays 32; execution width is K×32. This
+is the compute-tile bridge, with host orchestration per tile and existing
+intrinsic-array physics, rather than the final explicit-block leaf interfaces.
+
+```bash
+export ECRAD_FULL_BATCH_SIZE=256
+```
+
+This switch selects the full pipeline in place of the staged SW/LW/gas modes.
+No host optical-property packing is used. Bit-identity input seeds are gathered;
+ordinary initialization preserves each original logical block's seed indices.
+The immutable field-index metadata is mapped for the gather/scatter lifetime.
+
+- Job 30164046: matched frozen GPU parent **1.431343 -> 0.342256 s** at K128,
+  **76.088% reduction / 4.182× faster**; all five pairs improve.
+- Job 30166891: K256 gives **0.331322 s**, versus **0.345101 s** at K128 in the
+  same tuning job. Fresh same-allocation CPU NPROMA=32, 32 physical cores gives
+  **0.773025 s**, so the GPU is **2.333× faster** at the same quarter-node share.
+- SP/DP full-domain and mixed-day/night partial checks have zero saved-output
+  deviation from the GPU parent. Selected normal-mode SP checks against a
+  separately rebuilt non-bit-identity parent also match exactly.
+- GPU CTest 13/13 per precision; native CPU DP/SP regression 182/182.
+- Nsight iteration-2 captures exclude setup/warmup: K128 has 965 launches;
+  K256 has 579 launches and ~0.28877 s total GPU kernel duration. CPU API/wait
+  durations overlap device work and are not added to this total.
+
+The native SW vector policy wins over tested fixed 32/64/256 lengths. The
+`ECRAD_SW_VECTOR_LENGTH` build macro is an optional experimental control,
+not a default algorithm change. No graphs, approximate math or RNG changes
+are used. The default full-tile physics still allocates internal scratch per
+execution tile; explicit-block interfaces and persistent leaf workspaces can
+be developed further without reintroducing per-model-block orchestration.
+
+The benchmark build optionally defines `ECRAD_NSYS_CAPTURE_API` and links
+CUDA runtime profiling entry points; `ECRAD_NSYS_CAPTURE=1` captures the second
+iteration through the CUDA Profiler API. Normal builds need no profiling API.
+See `batch-pilot/run-full-milestone.sbatch`, `run-full-tuning.sbatch` and the
+branch-root `sp_bench_versions.md` for complete results and source artifacts.
+
 ## Supported initial path
 
 - OpenACC, McICA ACC SW, clear and direct diagnostics enabled.
@@ -82,7 +184,7 @@ launching the complete pipeline for every block.
 - `batch-pilot/run-gpu.sbatch`: original DP/SP synthetic solver comparisons.
 - `batch-pilot/run-sp-perf.sbatch`: frozen-source real-input SP solver experiment.
 - `batch-pilot/run-integration.sbatch`: full-radiation SP validation and timing.
-- `batch-pilot/run-integration-dp.sbatch`: DP integration correctness, no DP timing.
+ - `batch-pilot/run-integration-dp.sbatch`: DP integration correctness, no DP timing.
 
 Integration comparisons use pristine **2be60a2**, not the later five-band gas
 candidate. A candidate K=0 control isolates the lifetime refactor; K=1/16/32

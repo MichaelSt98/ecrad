@@ -312,10 +312,16 @@ contains
     character(*), parameter :: rad_prop_base_file_name = "radiative_properties"
 
     integer :: jcol, jlev, jband
+    logical :: ll_lw_batch
+    logical :: ll_gas_batch
 
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_interface:radiation',0,hook_handle)
+    ll_lw_batch=.false.
+    if (present(yd_sw_batch)) ll_lw_batch=yd_sw_batch%lw_enabled
+    ll_gas_batch=.false.
+    if (present(yd_sw_batch)) ll_gas_batch=allocated(yd_sw_batch%gas_tile)
 
     if (present(yd_sw_batch)) then
       if (.not. present(kslot)) then
@@ -343,6 +349,13 @@ contains
       ! decreasing height: progress normally
 
       ! Extract surface albedos at each gridpoint
+      if (present(yd_sw_batch)) then
+        if (yd_sw_batch%profile) call yd_sw_batch%profile_mark(4,.true.)
+      ENDIF
+      if (ll_gas_batch) then
+        call yd_sw_batch%gas_tile%load(kslot,istartcol,iendcol,od_lw,od_sw,ssa_sw, &
+             & planck_hl,lw_emission,lw_albedo,sw_albedo_direct,sw_albedo_diffuse,incoming_sw)
+      else
       call single_level%get_albedos(istartcol, iendcol, config, &
            &                        sw_albedo_direct, sw_albedo_diffuse, &
            &                        lw_albedo)
@@ -376,6 +389,7 @@ contains
         end if
       end if
 
+      ENDIF ! tiled or per-block gas optics
       if (config%do_clouds) then
         ! Crop the cloud fraction to remove clouds that have too small
         ! a fraction or water content; after this, we can safely
@@ -462,7 +476,13 @@ contains
              &  od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
       end if
 
+      if (present(yd_sw_batch)) then
+        if (yd_sw_batch%profile) call yd_sw_batch%profile_mark(4,.false.)
+      ENDIF
       if (config%do_lw) then
+        if (present(yd_sw_batch)) then
+          if (yd_sw_batch%profile) call yd_sw_batch%profile_mark(5,.true.)
+        ENDIF
         if (config%iverbose >= 2) then
           write(nulout,'(a)') 'Computing longwave fluxes'
         end if
@@ -488,10 +508,15 @@ contains
 #endif
         else if (config%i_solver_lw == ISolverMcICAACC) then
           ! Compute fluxes using the McICA ACC longwave solver
-          call solver_mcica_acc_lw(nlev,istartcol,iendcol, &
-               &  config, single_level, cloud, &
-               &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
-               &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
+          if (ll_lw_batch) then
+            call yd_sw_batch%stage_lw(kslot,istartcol,iendcol,single_level,cloud, &
+                 & od_lw,od_lw_cloud,ssa_lw_cloud,g_lw_cloud,planck_hl,lw_emission,lw_albedo)
+          else
+            call solver_mcica_acc_lw(nlev,istartcol,iendcol, &
+                &  config, single_level, cloud, &
+                &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
+                &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
+          ENDIF
         else if (config%i_solver_lw == ISolverSPARTACUS) then
           ! Compute fluxes using the SPARTACUS longwave solver
           call solver_spartacus_lw(nlev,istartcol,iendcol, &
@@ -518,6 +543,9 @@ contains
         end if
       end if
 
+      if (present(yd_sw_batch)) then
+        if (yd_sw_batch%profile .and. config%do_lw) call yd_sw_batch%profile_mark(5,.false.)
+      ENDIF
       if (config%do_sw) then
         if (config%iverbose >= 2) then
           write(nulout,'(a)') 'Computing shortwave fluxes'

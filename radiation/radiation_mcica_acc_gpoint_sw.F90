@@ -293,6 +293,10 @@ contains
     ! Keep the large-block geometry; avoid only 28 gangs at NPROMA=32.
     vector_len = 128
     if (iendcol-istartcol+1 <= 64) vector_len = 32
+#ifdef ECRAD_SW_VECTOR_LENGTH
+    ! Profile-guided build-time control; arithmetic and spectral order unchanged.
+    vector_len = ECRAD_SW_VECTOR_LENGTH
+#endif
 
     !$ACC ENTER DATA CREATE(flux_up, flux_dn_diffuse, flux_dn_direct, &
     !$ACC& flux_up_clear, flux_dn_diffuse_clear, flux_dn_direct_clear, &

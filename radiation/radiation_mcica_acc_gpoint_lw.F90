@@ -61,7 +61,8 @@ module radiation_mcica_acc_gpoint_lw
 
   use radiation_io, only : nulout
   public
-  private :: solver_mcica_acc_gpoint_lw_impl
+  ! Also used by the bounded LW tile; scalar/array interface avoids descriptor aliases.
+  public :: solver_mcica_acc_gpoint_lw_impl
 
 contains
 

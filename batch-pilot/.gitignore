@@ -5,3 +5,7 @@
 /integration-*/
 /integration-job-*.log
 /integration-dp-job-*.log
+/lineage-*/
+/lineage-job-*.log
+/milestone-*/
+/milestone-job-*.log

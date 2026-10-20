@@ -42,6 +42,9 @@ def prepare():
             stream.extractall(source, filter="data")
         if label == "candidate":
             names = subprocess.check_output(["git", "diff", "--name-only", "HEAD"], cwd=WORK).decode().splitlines()
+            names += [name for name in subprocess.check_output(
+                ["git", "ls-files", "--others", "--exclude-standard"], cwd=WORK).decode().splitlines()
+                if Path(name).suffix.lower() in (".f90", ".h")]
             names += ["radiation/radiation_sw_batch_context_mod.F90"]
             for name in names:
                 shutil.copy2(WORK / name, source / name)
@@ -60,13 +63,16 @@ def prepare():
 
 def build(label):
     path = RUN / "builds" / label
+    capture_flags = " -DECRAD_NSYS_CAPTURE_API" if os.environ.get("ECRAD_PROFILE_API") == "1" else ""
+    capture_flags += " " + os.environ.get("ECRAD_EXTRA_FLAGS", "")
     logged(["cmake", "-S", RUN / "sources" / label, "-B", path, "-G", "Ninja",
         f"-Decbuild_ROOT={DEPS / 'ecbuild'}", f"-Dfiat_ROOT={DEPS / 'fiat-install'}",
         "-DCMAKE_Fortran_COMPILER=nvfortran", "-DCMAKE_BUILD_TYPE=Release",
-        "-DECRAD_Fortran_FLAGS=-O3 -Mrecursive -gpu=cc80",
+        "-DECRAD_Fortran_FLAGS=-O3 -Mrecursive -gpu=cc80" + capture_flags,
         "-DCMAKE_EXE_LINKER_FLAGS=-L/usr/local/apps/nvidia/24.5/Linux_x86_64/24.5/cuda/lib64 -lcudart",
         "-DENABLE_FIAT=ON", "-DENABLE_OMP=OFF", "-DENABLE_ACC=ON", "-DENABLE_NVTX=OFF",
-        "-DENABLE_BITIDENTITY_TESTING=ON", f"-DENABLE_SINGLE_PRECISION={'ON' if PRECISION == 'sp' else 'OFF'}",
+        f"-DENABLE_BITIDENTITY_TESTING={os.environ.get('ECRAD_BITIDENTITY', 'ON')}",
+        f"-DENABLE_SINGLE_PRECISION={'ON' if PRECISION == 'sp' else 'OFF'}",
         f"-DENABLE_DOUBLE_PRECISION={'ON' if PRECISION == 'dp' else 'OFF'}",
         "-DBUILD_SHARED_LIBS=OFF", "-DENABLE_TESTS=ON"], RUN / f"configure-{label}.log")
     logged(["cmake", "--build", path, "-j", "6"], RUN / f"build-{label}.log")
