@@ -58,9 +58,7 @@ contains
     use radiation_cloud_generator_acc, only: cloud_generator_acc
     use radiation_cloud_cover, only    : beta2alpha, MaxCloudFrac
 
-#ifdef _OPENACC
     use radiation_mcica_acc_gpoint_lw, only : solver_mcica_acc_gpoint_lw
-#endif
 
     implicit none
 
