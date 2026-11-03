@@ -25,6 +25,7 @@
 module radiation_flux
 
   use parkind1, only : jprb
+  use radiation_io, only : nulerr, radiation_abort
 
   implicit none
   public
@@ -109,20 +110,26 @@ module radiation_flux
           &  lw_derivatives=>null()
 
    contains
-     procedure :: allocate   => allocate_flux_type
-     procedure :: deallocate => deallocate_flux_type
-     procedure :: calc_surface_spectral
-     procedure :: calc_toa_spectral
-     procedure :: out_of_physical_bounds
-     procedure :: heating_rate_out_of_physical_bounds
+    procedure :: allocate   => allocate_flux_type
+    procedure :: deallocate => deallocate_flux_type
+    procedure :: calc_surface_spectral
+    procedure :: calc_toa_spectral
+    procedure :: out_of_physical_bounds
+    procedure :: heating_rate_out_of_physical_bounds
+    procedure :: create_device => create_device_flux
+    procedure :: update_host   => update_host_flux
+    procedure :: update_device => update_device_flux
+    procedure :: delete_device => delete_device_flux
   end type flux_type
 
 ! Added for DWD (2020)
 #ifdef DWD_VECTOR_OPTIMIZATIONS
-      logical, parameter :: use_indexed_sum_vec = .true.
+  logical, parameter :: use_indexed_sum_vec = .true.
 #else
-      logical, parameter :: use_indexed_sum_vec = .false.
+  logical, parameter :: use_indexed_sum_vec = .false.
 #endif
+
+  !$omp declare target(indexed_sum)
 
 contains
 
@@ -140,6 +147,7 @@ contains
     class(flux_type), intent(inout) :: this
     type(config_type), intent(in)   :: config
 
+    integer                         :: jcol
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_flux:allocate',0,hook_handle)
@@ -152,14 +160,14 @@ contains
         allocate(this%lw_up_clear(istartcol:iendcol,nlev+1))
         allocate(this%lw_dn_clear(istartcol:iendcol,nlev+1))
       end if
-      
+
       if (config%do_save_spectral_flux) then
         if (config%n_spec_lw == 0) then
           write(nulerr,'(a)') '*** Error: number of LW spectral points to save not yet defined ' &
                & // 'so cannot allocate spectral flux arrays'
           call radiation_abort()
         end if
-        
+
         allocate(this%lw_up_band(config%n_spec_lw,istartcol:iendcol,nlev+1))
         allocate(this%lw_dn_band(config%n_spec_lw,istartcol:iendcol,nlev+1))
         if (config%do_clear) then
@@ -169,7 +177,7 @@ contains
                &                         istartcol:iendcol,nlev+1))
         end if
       end if
-      
+
       if (config%do_lw_derivatives) then
         allocate(this%lw_derivatives(istartcol:iendcol,nlev+1))
       end if
@@ -185,7 +193,7 @@ contains
           allocate(this%lw_up_toa_clear_band(config%n_bands_lw, istartcol:iendcol))
         end if
       end if
- 
+
       ! Allocate g-point downwelling fluxes at surface, and TOA fluxes
       allocate(this%lw_dn_surf_g(config%n_g_lw,istartcol:iendcol))
       allocate(this%lw_up_toa_g (config%n_g_lw,istartcol:iendcol))
@@ -200,7 +208,7 @@ contains
         allocate(this%lw_dn_surf_canopy(config%n_canopy_bands_lw,istartcol:iendcol))
       end if
     end if
-    
+
     ! Allocate shortwave arrays
     if (config%do_sw) then
       allocate(this%sw_up(istartcol:iendcol,nlev+1))
@@ -215,17 +223,17 @@ contains
           allocate(this%sw_dn_direct_clear(istartcol:iendcol,nlev+1))
         end if
       end if
-      
+
       if (config%do_save_spectral_flux) then
         if (config%n_spec_sw == 0) then
           write(nulerr,'(a)') '*** Error: number of SW spectral points to save not yet defined ' &
                & // 'so cannot allocate spectral flux arrays'
           call radiation_abort()
         end if
-        
+
         allocate(this%sw_up_band(config%n_spec_sw,istartcol:iendcol,nlev+1))
         allocate(this%sw_dn_band(config%n_spec_sw,istartcol:iendcol,nlev+1))
-        
+
         if (config%do_sw_direct) then
           allocate(this%sw_dn_direct_band(config%n_spec_sw, &
                &                          istartcol:iendcol,nlev+1))
@@ -241,7 +249,7 @@ contains
           end if
         end if
       end if
-      
+
       if (config%do_surface_sw_spectral_flux) then
         if (config%n_bands_sw == 0) then
           write(nulerr,'(a)') '*** Error: number of SW bands not yet defined ' &
@@ -270,7 +278,7 @@ contains
           allocate(this%sw_up_toa_clear_band(config%n_bands_sw, istartcol:iendcol))
         end if
       end if
-      
+
       ! Allocate g-point downwelling fluxes at surface, and TOA fluxes
       allocate(this%sw_dn_diffuse_surf_g(config%n_g_sw,istartcol:iendcol))
       allocate(this%sw_dn_direct_surf_g (config%n_g_sw,istartcol:iendcol))
@@ -289,18 +297,20 @@ contains
         allocate(this%sw_dn_direct_surf_canopy (config%n_canopy_bands_sw,istartcol:iendcol))
       end if
     end if
-    
+
     ! Allocate cloud cover arrays
     allocate(this%cloud_cover_lw(istartcol:iendcol))
     allocate(this%cloud_cover_sw(istartcol:iendcol))
 
     ! Some solvers may not write to cloud cover, so we initialize to
     ! an unphysical value
-    this%cloud_cover_lw = -1.0_jprb
-    this%cloud_cover_sw = -1.0_jprb
+    do jcol = istartcol,iendcol
+      this%cloud_cover_lw(jcol) = -1.0_jprb
+      this%cloud_cover_sw(jcol) = -1.0_jprb
+    end do
 
     if (lhook) call dr_hook('radiation_flux:allocate',1,hook_handle)
-    
+
   end subroutine allocate_flux_type
 
 
@@ -370,29 +380,15 @@ contains
         this%lw_dn_clear_band=>null()
       end if
     end if
-    
+
     if (associated(this%sw_up_band)) then
       deallocate(this%sw_up_band)
-      if (associated(this%sw_dn_band)) then
-        deallocate(this%sw_dn_band)
-        this%sw_dn_band=>null()
-      end if
-      if (associated(this%sw_up_clear_band)) then
-        deallocate(this%sw_up_clear_band)
-        this%sw_up_clear_band=>null()
-      end if
-      if (associated(this%sw_dn_clear_band)) then
-        deallocate(this%sw_dn_clear_band)
-        this%sw_dn_clear_band=>null()
-      end if
-      if (associated(this%sw_dn_direct_band)) then
-        deallocate(this%sw_dn_direct_band)
-        this%sw_dn_direct_band=>null()
-      end if
-      if (associated(this%sw_dn_direct_clear_band)) then
-        deallocate(this%sw_dn_direct_clear_band)
-        this%sw_dn_direct_clear_band=>null()
-      end if      
+      if (associated(this%sw_dn_band))        deallocate(this%sw_dn_band)
+      if (associated(this%sw_up_clear_band))  deallocate(this%sw_up_clear_band)
+      if (associated(this%sw_dn_clear_band))  deallocate(this%sw_dn_clear_band)
+      if (associated(this%sw_dn_direct_band)) deallocate(this%sw_dn_direct_band)
+      if (associated(this%sw_dn_direct_clear_band)) &
+           &   deallocate(this%sw_dn_direct_clear_band)
     end if
 
     if (associated(this%sw_dn_surf_band)) then
@@ -453,31 +449,22 @@ contains
         this%sw_dn_direct_surf_clear_g=>null()
       end if
 
-    if (associated(this%lw_up_toa_g)) then
-        deallocate(this%lw_up_toa_g)
-        this%lw_up_toa_g=>null()
-      end if
-    if (associated(this%sw_up_toa_g)) then
-        deallocate(this%sw_up_toa_g)
-        this%sw_up_toa_g=>null()
-      end if
-    if (associated(this%sw_dn_toa_g)) then
-        deallocate(this%sw_dn_toa_g)
-        this%sw_dn_toa_g=>null()
-      end if
-    if (associated(this%lw_up_toa_clear_g)) then
-        deallocate(this%lw_up_toa_clear_g)
-        this%lw_up_toa_clear_g=>null()
-      end if
-    if (associated(this%sw_up_toa_clear_g)) then
-        deallocate(this%sw_up_toa_clear_g)
-        this%sw_up_toa_clear_g=>null()
-      end if
+    ! !$ACC EXIT DATA DELETE(this%lw_up_toa_g) ASYNC(1) IF(allocated(this%lw_up_toa_g))
+    ! !$ACC EXIT DATA DELETE(this%sw_up_toa_g) ASYNC(1) IF(allocated(this%sw_up_toa_g))
+    ! !$ACC EXIT DATA DELETE(this%sw_dn_toa_g) ASYNC(1) IF(allocated(this%sw_dn_toa_g))
+    ! !$ACC EXIT DATA DELETE(this%lw_up_toa_clear_g) ASYNC(1) IF(allocated(this%lw_up_toa_clear_g))
+    ! !$ACC EXIT DATA DELETE(this%sw_up_toa_clear_g) ASYNC(1) IF(allocated(this%sw_up_toa_clear_g))
+    ! !$ACC WAIT
+    if (associated(this%lw_up_toa_g))                deallocate(this%lw_up_toa_g)
+    if (associated(this%sw_up_toa_g))                deallocate(this%sw_up_toa_g)
+    if (associated(this%sw_dn_toa_g))                deallocate(this%sw_dn_toa_g)
+    if (associated(this%lw_up_toa_clear_g))          deallocate(this%lw_up_toa_clear_g)
+    if (associated(this%sw_up_toa_clear_g))          deallocate(this%sw_up_toa_clear_g)
 
     if (lhook) call dr_hook('radiation_flux:deallocate',1,hook_handle)
 
   end subroutine deallocate_flux_type
-  
+
 
   !---------------------------------------------------------------------
   ! Calculate surface downwelling fluxes in each band using the
@@ -485,21 +472,41 @@ contains
   subroutine calc_surface_spectral(this, config, istartcol, iendcol)
 
     use yomhook,          only : lhook, dr_hook, jphook
+#if defined(_OPENACC) || defined(OMPGPU)
+    use radiation_io,     only : nulerr, radiation_abort
+#endif
     use radiation_config, only : config_type
 
     class(flux_type),  intent(inout) :: this
     type(config_type), intent(in)    :: config
     integer,           intent(in)    :: istartcol, iendcol
 
-    integer :: jcol, jband, jalbedoband, nalbedoband
+    integer :: jcol, jband, jalbedoband, nalbedoband, jg
 
     ! Longwave surface downwelling in each band needed to compute
     ! canopy fluxes
     real(jprb) :: lw_dn_surf_band(config%n_bands_lw,istartcol:iendcol)
 
+    ! Indirect indexing temporaries
+    integer :: i_emiss_from_reordered_g_lw(config%n_g_lw)
+    integer :: i_albedo_from_reordered_g_sw(config%n_g_sw)
+
     real(jphook) :: hook_handle
 
+#if defined(OMPGPU)
+    integer :: istart, iend, ig
+    real(jprb) :: s1, s2
+#endif
+    select type (this)
+    type is (flux_type)
     if (lhook) call dr_hook('radiation_flux:calc_surface_spectral',0,hook_handle)
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    if (use_indexed_sum_vec) then
+      write(nulerr,'(a)') '*** Error: radiation_flux:calc_surface_spectral use_indexed_sum_vec==.true. not ported to GPU'
+      call radiation_abort()
+    endif
+#endif
 
     if (config%do_sw .and. config%do_surface_sw_spectral_flux) then
 
@@ -516,6 +523,17 @@ contains
                &  + this%sw_dn_direct_surf_band(:,jcol)
         end do
       else
+
+#if defined(OMPGPU)
+        call sum_surf_band_omp(istartcol, iendcol, config%n_g_sw, config%n_bands_sw, &
+             &  lbound(this%sw_dn_direct_surf_g,2), ubound(this%sw_dn_direct_surf_g,2), &
+             &  config%i_band_from_reordered_g_sw, this%sw_dn_direct_surf_g, &
+             &  this%sw_dn_diffuse_surf_g, this%sw_dn_direct_surf_band, &
+             &  this%sw_dn_surf_band)
+#else
+        !$ACC PARALLEL DEFAULT(PRESENT) NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) &
+        !$ACC   VECTOR_LENGTH(32*((config%n_g_sw-1)/32+1)) ASYNC(1)
+        !$ACC LOOP GANG
         do jcol = istartcol,iendcol
           call indexed_sum(this%sw_dn_direct_surf_g(:,jcol), &
                &           config%i_band_from_reordered_g_sw, &
@@ -527,6 +545,8 @@ contains
                &  = this%sw_dn_surf_band(:,jcol) &
                &  + this%sw_dn_direct_surf_band(:,jcol)
         end do
+        !$ACC END PARALLEL
+#endif
       end if
 
       if (config%do_clear) then
@@ -543,6 +563,16 @@ contains
                  &  + this%sw_dn_direct_surf_clear_band(:,jcol)
           end do
         else
+#if defined(OMPGPU)
+          call sum_surf_band_omp(istartcol, iendcol, config%n_g_sw, config%n_bands_sw, &
+               &  lbound(this%sw_dn_direct_surf_clear_g,2), ubound(this%sw_dn_direct_surf_clear_g,2), &
+               &  config%i_band_from_reordered_g_sw, this%sw_dn_direct_surf_clear_g, &
+               &  this%sw_dn_diffuse_surf_clear_g, this%sw_dn_direct_surf_clear_band, &
+               &  this%sw_dn_surf_clear_band)
+#else
+          !$ACC PARALLEL DEFAULT(PRESENT) NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) &
+          !$ACC   VECTOR_LENGTH(32*(config%n_g_sw-1)/32+1) ASYNC(1)
+          !$ACC LOOP GANG
           do jcol = istartcol,iendcol
             call indexed_sum(this%sw_dn_direct_surf_clear_g(:,jcol), &
                  &           config%i_band_from_reordered_g_sw, &
@@ -554,6 +584,8 @@ contains
                  &  = this%sw_dn_surf_clear_band(:,jcol) &
                  &  + this%sw_dn_direct_surf_clear_band(:,jcol)
           end do
+          !$ACC END PARALLEL
+#endif
         end if
       end if
 
@@ -562,72 +594,170 @@ contains
     ! Fluxes in bands required for canopy radiative transfer
     if (config%do_sw .and. config%do_canopy_fluxes_sw) then
       if (config%use_canopy_full_spectrum_sw) then
-        this%sw_dn_diffuse_surf_canopy(:,istartcol:iendcol) = this%sw_dn_diffuse_surf_g(:,istartcol:iendcol)
-        this%sw_dn_direct_surf_canopy (:,istartcol:iendcol) = this%sw_dn_direct_surf_g (:,istartcol:iendcol)
+#if defined(OMPGPU)
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
+          do jg = 1,config%n_g_sw
+            this%sw_dn_diffuse_surf_canopy(jg,jcol) = this%sw_dn_diffuse_surf_g(jg,jcol)
+            this%sw_dn_direct_surf_canopy (jg,jcol) = this%sw_dn_direct_surf_g (jg,jcol)
+          end do
+        end do
+        !$ACC END PARALLEL
+#if defined(OMPGPU)
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
       else if (config%do_nearest_spectral_sw_albedo) then
+        !$ACC DATA CREATE(i_albedo_from_reordered_g_sw)
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
+        !$ACC LOOP GANG VECTOR
+        do jg = 1,config%n_g_sw
+          i_albedo_from_reordered_g_sw(jg) = config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw(jg))
+        end do
+        !$ACC END PARALLEL
         if (use_indexed_sum_vec) then
           call indexed_sum_vec(this%sw_dn_direct_surf_g, &
-               &               config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw), &
+               &               i_albedo_from_reordered_g_sw, &
                &               this%sw_dn_direct_surf_canopy, istartcol, iendcol)
           call indexed_sum_vec(this%sw_dn_diffuse_surf_g, &
-               &               config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw), &
+               &               i_albedo_from_reordered_g_sw, &
                &               this%sw_dn_diffuse_surf_canopy, istartcol, iendcol)
         else
+#if defined(OMPGPU)
+          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+          !$ACC PARALLEL DEFAULT(PRESENT) NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) &
+          !$ACC   VECTOR_LENGTH(32*(config%n_g_sw-1)/32+1) ASYNC(1)
+          !$ACC LOOP GANG
           do jcol = istartcol,iendcol
             call indexed_sum(this%sw_dn_direct_surf_g(:,jcol), &
-                 &           config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw), &
+                 &           i_albedo_from_reordered_g_sw, &
                  &           this%sw_dn_direct_surf_canopy(:,jcol))
             call indexed_sum(this%sw_dn_diffuse_surf_g(:,jcol), &
-                 &           config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw), &
+                 &           i_albedo_from_reordered_g_sw, &
                  &           this%sw_dn_diffuse_surf_canopy(:,jcol))
           end do
+          !$ACC END PARALLEL
+#if defined(OMPGPU)
+          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
         end if
+        !$ACC END DATA
       else
         ! More accurate calculations using weights, but requires
         ! this%sw_dn_[direct_]surf_band to be defined, i.e.
         ! config%do_surface_sw_spectral_flux == .true.
         nalbedoband = size(config%sw_albedo_weights,1)
-        this%sw_dn_diffuse_surf_canopy(:,istartcol:iendcol) = 0.0_jprb
-        this%sw_dn_direct_surf_canopy (:,istartcol:iendcol) = 0.0_jprb
-        do jband = 1,config%n_bands_sw
+#if defined(OMPGPU)
+        call canopy_sw_weights_omp(istartcol, iendcol, nalbedoband, config%n_bands_sw, &
+             &  size(this%sw_dn_diffuse_surf_canopy,1), &
+             &  lbound(this%sw_dn_surf_band,2), ubound(this%sw_dn_surf_band,2), config%sw_albedo_weights, &
+             &  this%sw_dn_surf_band, this%sw_dn_direct_surf_band, &
+             &  this%sw_dn_diffuse_surf_canopy, this%sw_dn_direct_surf_canopy)
+#else
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) &
+        !$ACC     PRESENT(this%sw_dn_diffuse_surf_canopy, this%sw_dn_direct_surf_canopy, &
+        !$ACC             config%sw_albedo_weights)
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
           do jalbedoband = 1,nalbedoband
-            if (config%sw_albedo_weights(jalbedoband,jband) /= 0.0_jprb) then
-              ! Initially, "diffuse" is actually "total"
-              this%sw_dn_diffuse_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  = this%sw_dn_diffuse_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  + config%sw_albedo_weights(jalbedoband,jband) &
-                   &    * this%sw_dn_surf_band(jband,istartcol:iendcol)
-              this%sw_dn_direct_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  = this%sw_dn_direct_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  + config%sw_albedo_weights(jalbedoband,jband) &
-                   &    * this%sw_dn_direct_surf_band(jband,istartcol:iendcol)
-            end if
+            this%sw_dn_diffuse_surf_canopy(jalbedoband,jcol) = 0.0_jprb
+            this%sw_dn_direct_surf_canopy (jalbedoband,jcol) = 0.0_jprb
           end do
         end do
-        ! Subtract the direct from total to get diffuse
-        this%sw_dn_diffuse_surf_canopy(:,istartcol:iendcol) &
-             &  = this%sw_dn_diffuse_surf_canopy(:,istartcol:iendcol) &
-             &  - this%sw_dn_direct_surf_canopy(:,istartcol:iendcol)
+
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol, iendcol
+          do jalbedoband = 1,nalbedoband
+            !$ACC LOOP SEQ
+            do jband = 1,config%n_bands_sw
+              if (config%sw_albedo_weights(jalbedoband,jband) /= 0.0_jprb) then
+                ! Initially, "diffuse" is actually "total"
+                this%sw_dn_diffuse_surf_canopy(jalbedoband,jcol) &
+                    &  = this%sw_dn_diffuse_surf_canopy(jalbedoband,jcol) &
+                    &  + config%sw_albedo_weights(jalbedoband,jband) &
+                    &    * this%sw_dn_surf_band(jband,jcol)
+                this%sw_dn_direct_surf_canopy(jalbedoband,jcol) &
+                    &  = this%sw_dn_direct_surf_canopy(jalbedoband,jcol) &
+                    &  + config%sw_albedo_weights(jalbedoband,jband) &
+                    &    * this%sw_dn_direct_surf_band(jband,jcol)
+              end if
+            end do
+          end do
+        end do
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
+          do jalbedoband = 1,nalbedoband
+            ! Subtract the direct from total to get diffuse
+            this%sw_dn_diffuse_surf_canopy(jalbedoband,jcol) &
+                &  = this%sw_dn_diffuse_surf_canopy(jalbedoband,jcol) &
+                &  - this%sw_dn_direct_surf_canopy(jalbedoband,jcol)
+          end do
+        end do
+        !$ACC END PARALLEL
+#endif
       end if
 
     end if ! do_canopy_fluxes_sw
 
     if (config%do_lw .and. config%do_canopy_fluxes_lw) then
       if (config%use_canopy_full_spectrum_lw) then
-        this%lw_dn_surf_canopy(:,istartcol:iendcol) = this%lw_dn_surf_g(:,istartcol:iendcol)
+#if defined(OMPGPU)
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
+          do jg = 1,config%n_g_lw
+            this%lw_dn_surf_canopy(jg,jcol) = this%lw_dn_surf_g(jg,jcol)
+          end do
+        end do
+        !$ACC END PARALLEL
+#if defined(OMPGPU)
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
       else if (config%do_nearest_spectral_lw_emiss) then
+#if defined (OMPGPU)
+        call canopy_lw_nearest_omp(istartcol, iendcol, config%n_g_lw, &
+             &  size(config%i_emiss_from_band_lw), size(this%lw_dn_surf_canopy,1), &
+             &  lbound(this%lw_dn_surf_g,2), ubound(this%lw_dn_surf_g,2), &
+             &  config%i_emiss_from_band_lw, config%i_band_from_reordered_g_lw, &
+             &  this%lw_dn_surf_g, this%lw_dn_surf_canopy)
+#else
+        !$ACC DATA CREATE(i_emiss_from_reordered_g_lw)
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
+        !$ACC LOOP GANG VECTOR
+        do jg = 1,config%n_g_lw
+          i_emiss_from_reordered_g_lw(jg) = config%i_emiss_from_band_lw(config%i_band_from_reordered_g_lw(jg))
+        end do
+        !$ACC END PARALLEL
         if (use_indexed_sum_vec) then
           call indexed_sum_vec(this%lw_dn_surf_g, &
-               &               config%i_emiss_from_band_lw(config%i_band_from_reordered_g_lw), &
+               &               i_emiss_from_reordered_g_lw, &
                &               this%lw_dn_surf_canopy, istartcol, iendcol)
+              !  &               config%i_emiss_from_band_lw(config%i_band_from_reordered_g_lw), &
         else
+!          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) VECTOR_LENGTH(1)
+          !$ACC PARALLEL DEFAULT(PRESENT) &
+          !$ACC    NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) &
+          !$ACC    VECTOR_LENGTH(32*(config%n_g_lw-1)/32+1) ASYNC(1)
+          !$ACC LOOP GANG
           do jcol = istartcol,iendcol
             call indexed_sum(this%lw_dn_surf_g(:,jcol), &
-                 &           config%i_emiss_from_band_lw(config%i_band_from_reordered_g_lw), &
+               &             i_emiss_from_reordered_g_lw, &
                  &           this%lw_dn_surf_canopy(:,jcol))
           end do
+          !$ACC END PARALLEL
         end if
+        !$ACC END DATA
+#endif
       else
+#if defined(OMPGPU)
+        !$OMP TARGET ENTER DATA MAP(ALLOC: lw_dn_surf_band)
+#endif
+        !$ACC DATA CREATE(lw_dn_surf_band) ASYNC(1)
         ! Compute fluxes in each longwave emissivity interval using
         ! weights; first sum over g points to get the values in bands
         if (use_indexed_sum_vec) then
@@ -635,30 +765,214 @@ contains
                &               config%i_band_from_reordered_g_lw, &
                &               lw_dn_surf_band, istartcol, iendcol)
         else
+#if defined(OMPGPU)
+          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+          !$ACC PARALLEL DEFAULT(PRESENT) NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS(1) &
+          !$ACC   VECTOR_LENGTH(32*(config%n_g_lw-1)/32+1) ASYNC(1)
+          !$ACC LOOP GANG
           do jcol = istartcol,iendcol
             call indexed_sum(this%lw_dn_surf_g(:,jcol), &
                  &           config%i_band_from_reordered_g_lw, &
                  &           lw_dn_surf_band(:,jcol))
           end do
+          !$ACC END PARALLEL
+#if defined(OMPGPU)
+          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
         end if
         nalbedoband = size(config%lw_emiss_weights,1)
-        this%lw_dn_surf_canopy(:,istartcol:iendcol) = 0.0_jprb
-        do jband = 1,config%n_bands_lw
+#if defined(OMPGPU)
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+        !$ACC PARALLEL DEFAULT(PRESENT) &
+        !$ACC   PRESENT(this%lw_dn_surf_canopy, config%lw_emiss_weights) ASYNC(1)
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
           do jalbedoband = 1,nalbedoband
-            if (config%lw_emiss_weights(jalbedoband,jband) /= 0.0_jprb) then
-              this%lw_dn_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  = this%lw_dn_surf_canopy(jalbedoband,istartcol:iendcol) &
-                   &  + config%lw_emiss_weights(jalbedoband,jband) &
-                   &    * lw_dn_surf_band(jband,istartcol:iendcol)
-            end if
+            this%lw_dn_surf_canopy(jalbedoband,jcol) = 0.0_jprb
           end do
         end do
+#if defined(OMPGPU)
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+#if defined(OMPGPU)
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
+          do jalbedoband = 1,nalbedoband
+#if defined(OMPGPU)
+            s1 = 0
+            do jband = 1,config%n_bands_lw
+               if (config%lw_emiss_weights(jalbedoband,jband) /= 0.0_jprb) then
+                  s1 = s1 + config%lw_emiss_weights(jalbedoband,jband) &
+                   &    * lw_dn_surf_band(jband,jcol)
+               end if
+            end do
+            this%lw_dn_surf_canopy(jalbedoband,jcol) &
+                 &  = this%lw_dn_surf_canopy(jalbedoband,jcol) + s1
+#else
+            !$ACC LOOP SEQ
+            do jband = 1,config%n_bands_lw
+               if (config%lw_emiss_weights(jalbedoband,jband) /= 0.0_jprb) then
+                  this%lw_dn_surf_canopy(jalbedoband,jcol) &
+                       &  = this%lw_dn_surf_canopy(jalbedoband,jcol) &
+                       &  + config%lw_emiss_weights(jalbedoband,jband) &
+                       &    * lw_dn_surf_band(jband,jcol)
+               end if
+            end do
+#endif
+        end do
+        end do
+        !$ACC END PARALLEL
+#if defined(OMPGPU)
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+        !$ACC END DATA
+#if defined(OMPGPU)
+        !$OMP TARGET EXIT DATA MAP(DELETE: lw_dn_surf_band)
+#endif
       end if
     end if
 
     if (lhook) call dr_hook('radiation_flux:calc_surface_spectral',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_flux:calc_surface_spectral: unexpected dynamic type')
+    end select
 
   end subroutine calc_surface_spectral
+
+
+  !---------------------------------------------------------------------
+  ! The following three routines exist so that the OpenMP target
+  ! constructs below do not name any component of config: on amdflang
+  ! 24.3.0 that makes the compiler implicitly map the whole config
+  ! object and deep-copy its allocatable components on every kernel
+  ! launch, even though they are already resident on the device.
+  ! Everything is passed by explicit shape so no descriptors are needed
+  ! either.
+
+  ! Sum g-point surface fluxes into bands, then add direct to diffuse to
+  ! obtain the total
+  subroutine sum_surf_band_omp(istartcol, iendcol, ng, nband, col_lo, col_hi, &
+       &  i_band_from_reordered_g, dn_direct_g, dn_diffuse_g, &
+       &  dn_direct_band, dn_band)
+
+    integer,    intent(in)    :: istartcol, iendcol, ng, nband, col_lo, col_hi
+    integer,    intent(in)    :: i_band_from_reordered_g(ng)
+    ! Whole-array bounds preserve column addresses when processing a subrange.
+    real(jprb), intent(in)    :: dn_direct_g(ng,col_lo:col_hi)
+    real(jprb), intent(in)    :: dn_diffuse_g(ng,col_lo:col_hi)
+    real(jprb), intent(inout) :: dn_direct_band(nband,col_lo:col_hi)
+    real(jprb), intent(inout) :: dn_band(nband,col_lo:col_hi)
+
+    integer :: jcol, jband
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+    do jcol = istartcol,iendcol
+      call indexed_sum(dn_direct_g(:,jcol), i_band_from_reordered_g, &
+           &           dn_direct_band(:,jcol))
+      call indexed_sum(dn_diffuse_g(:,jcol), i_band_from_reordered_g, &
+           &           dn_band(:,jcol))
+      do jband = 1,nband
+        dn_band(jband,jcol) = dn_band(jband,jcol) + dn_direct_band(jband,jcol)
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+  end subroutine sum_surf_band_omp
+
+
+  ! Map band fluxes onto the canopy albedo intervals using weights
+  subroutine canopy_sw_weights_omp(istartcol, iendcol, nalbedoband, nband, ncanopy, col_lo, col_hi, &
+       &  sw_albedo_weights, dn_surf_band, dn_direct_surf_band, &
+       &  dn_diffuse_canopy, dn_direct_canopy)
+
+    integer,    intent(in)  :: istartcol, iendcol, nalbedoband, nband, ncanopy, col_lo, col_hi
+    real(jprb), intent(in)  :: sw_albedo_weights(nalbedoband,nband)
+    real(jprb), intent(in)  :: dn_surf_band(nband,col_lo:col_hi)
+    real(jprb), intent(in)  :: dn_direct_surf_band(nband,col_lo:col_hi)
+    real(jprb), intent(out) :: dn_diffuse_canopy(ncanopy,col_lo:col_hi)
+    real(jprb), intent(out) :: dn_direct_canopy(ncanopy,col_lo:col_hi)
+
+    integer    :: jcol, jalbedoband, jband
+    real(jprb) :: s1, s2
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+    do jcol = istartcol,iendcol
+      do jalbedoband = 1,nalbedoband
+        dn_diffuse_canopy(jalbedoband,jcol) = 0.0_jprb
+        dn_direct_canopy (jalbedoband,jcol) = 0.0_jprb
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(s1,s2)
+    do jcol = istartcol,iendcol
+      do jalbedoband = 1,nalbedoband
+        s1 = 0.0_jprb
+        s2 = 0.0_jprb
+        do jband = 1,nband
+          if (sw_albedo_weights(jalbedoband,jband) /= 0.0_jprb) then
+            ! Initially, "diffuse" is actually "total"
+            s1 = s1 + sw_albedo_weights(jalbedoband,jband) &
+                &   * dn_surf_band(jband,jcol)
+            s2 = s2 + sw_albedo_weights(jalbedoband,jband) &
+                &   * dn_direct_surf_band(jband,jcol)
+          end if
+        end do
+        dn_diffuse_canopy(jalbedoband,jcol) = dn_diffuse_canopy(jalbedoband,jcol) + s1
+        dn_direct_canopy (jalbedoband,jcol) = dn_direct_canopy (jalbedoband,jcol) + s2
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+    do jcol = istartcol,iendcol
+      do jalbedoband = 1,nalbedoband
+        ! Subtract the direct from total to get diffuse
+        dn_diffuse_canopy(jalbedoband,jcol) = dn_diffuse_canopy(jalbedoband,jcol) &
+            &  - dn_direct_canopy(jalbedoband,jcol)
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+  end subroutine canopy_sw_weights_omp
+
+
+  ! Sum longwave g-point surface fluxes straight onto the canopy
+  ! emissivity intervals
+  subroutine canopy_lw_nearest_omp(istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi, &
+       &  i_emiss_from_band, i_band_from_reordered_g, lw_dn_surf_g, lw_dn_surf_canopy)
+
+    integer,    intent(in)  :: istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi
+    integer,    intent(in)  :: i_emiss_from_band(nband)
+    integer,    intent(in)  :: i_band_from_reordered_g(ng)
+    real(jprb), intent(in)  :: lw_dn_surf_g(ng,col_lo:col_hi)
+    real(jprb), intent(out) :: lw_dn_surf_canopy(ncanopy,col_lo:col_hi)
+
+    integer :: jcol, jg
+    integer :: i_emiss_from_reordered_g(ng)
+
+    !$OMP TARGET ENTER DATA MAP(ALLOC: i_emiss_from_reordered_g)
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+    do jg = 1,ng
+      i_emiss_from_reordered_g(jg) = i_emiss_from_band(i_band_from_reordered_g(jg))
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+    do jcol = istartcol,iendcol
+      call indexed_sum(lw_dn_surf_g(:,jcol), i_emiss_from_reordered_g, &
+           &           lw_dn_surf_canopy(:,jcol))
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+    !$OMP TARGET EXIT DATA MAP(DELETE: i_emiss_from_reordered_g)
+
+  end subroutine canopy_lw_nearest_omp
 
 
   !---------------------------------------------------------------------
@@ -668,6 +982,10 @@ contains
 
     use yomhook,          only : lhook, dr_hook, jphook
     use radiation_config, only : config_type
+#if defined(_OPENACC) || defined(OMPGPU)
+    use radiation_io,     only : nulerr, radiation_abort
+#endif
+
 
     class(flux_type),  intent(inout) :: this
     type(config_type), intent(in)    :: config
@@ -676,8 +994,15 @@ contains
     integer :: jcol, jband
 
     real(jphook) :: hook_handle
-    
+
     if (lhook) call dr_hook('radiation_flux:calc_toa_spectral',0,hook_handle)
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    if (config%do_toa_spectral_flux) then
+      write(nulerr,'(a)') '*** Error: radiation_flux:calc_toa_spectral not ported to GPU.'
+      call radiation_abort()
+    end if
+#endif
 
     if (config%do_sw .and. config%do_toa_spectral_flux) then
 
@@ -698,7 +1023,7 @@ contains
                &           this%sw_up_toa_band(:,jcol))
         end do
       end if
-      
+
       if (config%do_clear) then
         if (use_indexed_sum_vec) then
           call indexed_sum_vec(this%sw_up_toa_clear_g, &
@@ -715,7 +1040,6 @@ contains
     end if
 
     if (config%do_lw .and. config%do_toa_spectral_flux) then
-
       if (use_indexed_sum_vec) then
         call indexed_sum_vec(this%lw_up_toa_g, &
              &               config%i_band_from_reordered_g_lw, &
@@ -727,7 +1051,7 @@ contains
                &           this%lw_up_toa_band(:,jcol))
         end do
       end if
-      
+
       if (config%do_clear) then
         if (use_indexed_sum_vec) then
           call indexed_sum_vec(this%lw_up_toa_clear_g, &
@@ -742,51 +1066,54 @@ contains
         end if
       end if
     end if
-    
+
     if (lhook) call dr_hook('radiation_flux:calc_toa_spectral',1,hook_handle)
 
   end subroutine calc_toa_spectral
-  
-    
+
+
   !---------------------------------------------------------------------
   ! Return .true. if the most important flux variables are out of a
   ! physically sensible range, optionally only considering columns
   ! between istartcol and iendcol
-  function out_of_physical_bounds(this, istartcol, iendcol) result(is_bad)
+  function out_of_physical_bounds(this, istartcol, iendcol, lacc) result(is_bad)
 
     use yomhook,          only : lhook, dr_hook, jphook
     use radiation_check,  only : out_of_bounds_2d
 
     class(flux_type), intent(inout) :: this
     integer, optional,intent(in) :: istartcol, iendcol
+    logical, optional,intent(in) :: lacc
     logical                      :: is_bad
 
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_flux:out_of_physical_bounds',0,hook_handle)
 
-    is_bad =    out_of_bounds_2d(this%lw_up, 'lw_up', 10.0_jprb, 900.0_jprb, .false., i1=istartcol, i2=iendcol) &
-         & .or. out_of_bounds_2d(this%lw_dn, 'lw_dn', 0.0_jprb,  800.0_jprb, .false., i1=istartcol, i2=iendcol) &
-         & .or. out_of_bounds_2d(this%sw_up, 'sw_up', 0.0_jprb, 1500.0_jprb, .false., i1=istartcol, i2=iendcol) &
-         & .or. out_of_bounds_2d(this%sw_dn, 'sw_dn', 0.0_jprb, 1500.0_jprb, .false., i1=istartcol, i2=iendcol) &
-         & .or. out_of_bounds_2d(this%sw_dn_direct, 'sw_dn_direct', 0.0_jprb, 1500.0_jprb, .false., i1=istartcol, i2=iendcol) &
-         & .or. out_of_bounds_2d(this%lw_derivatives, 'lw_derivatives', 0.0_jprb, 1.0_jprb, .false., i1=istartcol, i2=iendcol) &
+    is_bad =    out_of_bounds_2d(this%lw_up, 'lw_up', 10.0_jprb, 900.0_jprb, .false., i1=istartcol, i2=iendcol, lacc=lacc) &
+         & .or. out_of_bounds_2d(this%lw_dn, 'lw_dn', 0.0_jprb,  800.0_jprb, .false., i1=istartcol, i2=iendcol, lacc=lacc) &
+         & .or. out_of_bounds_2d(this%sw_up, 'sw_up', 0.0_jprb, 1500.0_jprb, .false., i1=istartcol, i2=iendcol, lacc=lacc) &
+         & .or. out_of_bounds_2d(this%sw_dn, 'sw_dn', 0.0_jprb, 1500.0_jprb, .false., i1=istartcol, i2=iendcol, lacc=lacc) &
+         & .or. out_of_bounds_2d(this%sw_dn_direct, 'sw_dn_direct', 0.0_jprb, 1500.0_jprb, &
+         &                       .false., i1=istartcol, i2=iendcol, lacc=lacc) &
+         & .or. out_of_bounds_2d(this%lw_derivatives, 'lw_derivatives', 0.0_jprb, 1.0_jprb, &
+         &                       .false., i1=istartcol, i2=iendcol, lacc=lacc) &
          & .or. out_of_bounds_2d(this%sw_dn_surf_band, 'sw_dn_surf_band', 0.0_jprb, 1500.0_jprb, &
-         &                       .false., j1=istartcol, j2=iendcol) &
+         &                       .false., j1=istartcol, j2=iendcol, lacc=lacc) &
          & .or. out_of_bounds_2d(this%sw_dn_surf_clear_band, 'sw_dn_surf_clear_band', 0.0_jprb, 1500.0_jprb, &
-         &                       .false., j1=istartcol, j2=iendcol)
+         &                       .false., j1=istartcol, j2=iendcol, lacc=lacc)
 
     if (lhook) call dr_hook('radiation_flux:out_of_physical_bounds',1,hook_handle)
 
   end function out_of_physical_bounds
-  
+
   !---------------------------------------------------------------------
   ! Return .true. if the heating rates are out of a physically
   ! sensible range, optionally only considering columns between
   ! istartcol and iendcol. This function allocates and deallocates
   ! memory due to the requirements for inputs of out_of_bounds_2d.
   function heating_rate_out_of_physical_bounds(this, nlev, istartcol, iendcol, pressure_hl) result(is_bad)
-    
+
     use radiation_check, only : out_of_bounds_2d
     use radiation_constants, only : AccelDueToGravity
 
@@ -796,13 +1123,13 @@ contains
     class(flux_type), intent(inout) :: this
     integer, intent(in) :: istartcol, iendcol, nlev
     logical                      :: is_bad
-    
+
     real(jprb), intent(in) :: pressure_hl(:,:)
 
     real(jprb), pointer :: hr_K_day(:,:)
 
     real(jprb) :: scaling(istartcol:iendcol,nlev)
-    
+
     allocate(hr_K_day(istartcol:iendcol,nlev))
 
     scaling = -(24.0_jprb * 3600.0_jprb * AccelDueToGravity / SpecificHeatDryAir) &
@@ -851,7 +1178,7 @@ contains
   !---------------------------------------------------------------------
   ! As "add_indexed_sum" but this version overwrites existing contents
   ! of "dest"
-  pure subroutine indexed_sum(source, ind, dest)
+  subroutine indexed_sum(source, ind, dest)
 
     real(jprb), intent(in)  :: source(:)
     integer,    intent(in)  :: ind(:)
@@ -859,15 +1186,34 @@ contains
 
     integer :: ig, jg, istart, iend
 
-    dest = 0.0
+    !$ACC ROUTINE VECTOR
 
+    istart = lbound(dest,1)
+    iend   = ubound(dest,1)
+
+#if defined(OMPGPU)
+    do jg = istart, iend
+       dest(jg) = 0.0
+    end do
+#else
+    dest = 0.0
+#endif
+    !! Nested parallelism does yet work with amdflang. Leave
+    !! these commented out for now. PJM 10/2/2025
     istart = lbound(source,1)
     iend   = ubound(source,1)
 
+    !!$OMP PARALLEL DO PRIVATE(ig)
+    !$ACC LOOP VECTOR PRIVATE(ig)
     do jg = istart, iend
       ig = ind(jg)
+      !!$OMP ATOMIC UPDATE
+      !$ACC ATOMIC UPDATE
       dest(ig) = dest(ig) + source(jg)
+      !$ACC END ATOMIC
+      !!$END OMP ATOMIC
     end do
+    !!$OMP END PARALLEL DO
 
   end subroutine indexed_sum
 
@@ -941,5 +1287,437 @@ contains
     end do
 
   end subroutine indexed_sum_profile
-  
+
+  !---------------------------------------------------------------------
+  ! Creates fields on device
+  subroutine create_device_flux(this)
+
+    class(flux_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (flux_type)
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up) IF(allocated(this%lw_up))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn) IF(allocated(this%lw_dn))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_clear) IF(allocated(this%lw_up_clear))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_clear) IF(allocated(this%lw_dn_clear))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up) IF(allocated(this%sw_up))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn) IF(allocated(this%sw_dn))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_clear) IF(allocated(this%sw_up_clear))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_clear) IF(allocated(this%sw_dn_clear))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct) IF(allocated(this%sw_dn_direct))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_band) IF(allocated(this%lw_up_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_band) IF(allocated(this%lw_dn_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_band) IF(allocated(this%sw_up_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_band) IF(allocated(this%sw_dn_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_derivatives) IF(allocated(this%lw_derivatives))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band))
+
+    !$ACC ENTER DATA CREATE(this%lw_up) IF(allocated(this%lw_up)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn) IF(allocated(this%lw_dn)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_clear) IF(allocated(this%lw_up_clear)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_clear) IF(allocated(this%lw_dn_clear)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up) IF(allocated(this%sw_up)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn) IF(allocated(this%sw_dn)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_clear) IF(allocated(this%sw_up_clear)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_clear) IF(allocated(this%sw_dn_clear)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct) IF(allocated(this%sw_dn_direct)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_band) IF(allocated(this%lw_up_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_band) IF(allocated(this%lw_dn_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_band) IF(allocated(this%sw_up_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_band) IF(allocated(this%sw_dn_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_derivatives) IF(allocated(this%lw_derivatives)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_flux:create_device_flux: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device_flux
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host_flux(this)
+
+    class(flux_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (flux_type)
+    !$OMP TARGET UPDATE FROM(this%lw_up) IF(allocated(this%lw_up))
+    !$OMP TARGET UPDATE FROM(this%lw_dn) IF(allocated(this%lw_dn))
+    !$OMP TARGET UPDATE FROM(this%lw_up_clear) IF(allocated(this%lw_up_clear))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_clear) IF(allocated(this%lw_dn_clear))
+    !$OMP TARGET UPDATE FROM(this%sw_up) IF(allocated(this%sw_up))
+    !$OMP TARGET UPDATE FROM(this%sw_dn) IF(allocated(this%sw_dn))
+    !$OMP TARGET UPDATE FROM(this%sw_up_clear) IF(allocated(this%sw_up_clear))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_clear) IF(allocated(this%sw_dn_clear))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct) IF(allocated(this%sw_dn_direct))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear))
+    !$OMP TARGET UPDATE FROM(this%lw_up_band) IF(allocated(this%lw_up_band))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_band) IF(allocated(this%lw_dn_band))
+    !$OMP TARGET UPDATE FROM(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_up_band) IF(allocated(this%sw_up_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_band) IF(allocated(this%sw_dn_band))
+    !$OMP TARGET UPDATE FROM(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy))
+    !$OMP TARGET UPDATE FROM(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw))
+    !$OMP TARGET UPDATE FROM(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw))
+    !$OMP TARGET UPDATE FROM(this%lw_derivatives) IF(allocated(this%lw_derivatives))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g))
+    !$OMP TARGET UPDATE FROM(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g))
+    !$OMP TARGET UPDATE FROM(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g))
+    !$OMP TARGET UPDATE FROM(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g))
+    !$OMP TARGET UPDATE FROM(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g))
+    !$OMP TARGET UPDATE FROM(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g))
+    !$OMP TARGET UPDATE FROM(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band))
+    !$OMP TARGET UPDATE FROM(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band))
+    !$OMP TARGET UPDATE FROM(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band))
+    !$OMP TARGET UPDATE FROM(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band))
+    !$OMP TARGET UPDATE FROM(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band))
+
+    !$ACC UPDATE HOST(this%lw_up) IF(allocated(this%lw_up)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn) IF(allocated(this%lw_dn)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_clear) IF(allocated(this%lw_up_clear)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_clear) IF(allocated(this%lw_dn_clear)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up) IF(allocated(this%sw_up)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn) IF(allocated(this%sw_dn)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_clear) IF(allocated(this%sw_up_clear)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_clear) IF(allocated(this%sw_dn_clear)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct) IF(allocated(this%sw_dn_direct)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_band) IF(allocated(this%lw_up_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_band) IF(allocated(this%lw_dn_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_band) IF(allocated(this%sw_up_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_band) IF(allocated(this%sw_dn_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE HOST(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_derivatives) IF(allocated(this%lw_derivatives)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_flux:update_host_flux: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host_flux
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device_flux(this)
+
+    class(flux_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (flux_type)
+    !$OMP TARGET UPDATE TO(this%lw_up) IF(allocated(this%lw_up))
+    !$OMP TARGET UPDATE TO(this%lw_dn) IF(allocated(this%lw_dn))
+    !$OMP TARGET UPDATE TO(this%lw_up_clear) IF(allocated(this%lw_up_clear))
+    !$OMP TARGET UPDATE TO(this%lw_dn_clear) IF(allocated(this%lw_dn_clear))
+    !$OMP TARGET UPDATE TO(this%sw_up) IF(allocated(this%sw_up))
+    !$OMP TARGET UPDATE TO(this%sw_dn) IF(allocated(this%sw_dn))
+    !$OMP TARGET UPDATE TO(this%sw_up_clear) IF(allocated(this%sw_up_clear))
+    !$OMP TARGET UPDATE TO(this%sw_dn_clear) IF(allocated(this%sw_dn_clear))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct) IF(allocated(this%sw_dn_direct))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear))
+    !$OMP TARGET UPDATE TO(this%lw_up_band) IF(allocated(this%lw_up_band))
+    !$OMP TARGET UPDATE TO(this%lw_dn_band) IF(allocated(this%lw_dn_band))
+    !$OMP TARGET UPDATE TO(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band))
+    !$OMP TARGET UPDATE TO(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_up_band) IF(allocated(this%sw_up_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_band) IF(allocated(this%sw_dn_band))
+    !$OMP TARGET UPDATE TO(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band))
+    !$OMP TARGET UPDATE TO(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy))
+    !$OMP TARGET UPDATE TO(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy))
+    !$OMP TARGET UPDATE TO(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw))
+    !$OMP TARGET UPDATE TO(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw))
+    !$OMP TARGET UPDATE TO(this%lw_derivatives) IF(allocated(this%lw_derivatives))
+    !$OMP TARGET UPDATE TO(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g))
+    !$OMP TARGET UPDATE TO(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g))
+    !$OMP TARGET UPDATE TO(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g))
+    !$OMP TARGET UPDATE TO(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g))
+    !$OMP TARGET UPDATE TO(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g))
+    !$OMP TARGET UPDATE TO(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g))
+    !$OMP TARGET UPDATE TO(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g))
+    !$OMP TARGET UPDATE TO(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g))
+    !$OMP TARGET UPDATE TO(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g))
+    !$OMP TARGET UPDATE TO(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g))
+    !$OMP TARGET UPDATE TO(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band))
+    !$OMP TARGET UPDATE TO(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band))
+    !$OMP TARGET UPDATE TO(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band))
+    !$OMP TARGET UPDATE TO(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band))
+    !$OMP TARGET UPDATE TO(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band))
+
+    !$ACC UPDATE DEVICE(this%lw_up) IF(allocated(this%lw_up)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn) IF(allocated(this%lw_dn)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_clear) IF(allocated(this%lw_up_clear)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_clear) IF(allocated(this%lw_dn_clear)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up) IF(allocated(this%sw_up)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn) IF(allocated(this%sw_dn)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_clear) IF(allocated(this%sw_up_clear)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_clear) IF(allocated(this%sw_dn_clear)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct) IF(allocated(this%sw_dn_direct)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_band) IF(allocated(this%lw_up_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_band) IF(allocated(this%lw_dn_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_band) IF(allocated(this%sw_up_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_band) IF(allocated(this%sw_dn_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_derivatives) IF(allocated(this%lw_derivatives)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_flux:update_device_flux: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device_flux
+
+  !---------------------------------------------------------------------
+  ! Deletes fields on device
+  subroutine delete_device_flux(this)
+
+    class(flux_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (flux_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up) IF(allocated(this%lw_up))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn) IF(allocated(this%lw_dn))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_clear) IF(allocated(this%lw_up_clear))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_clear) IF(allocated(this%lw_dn_clear))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up) IF(allocated(this%sw_up))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn) IF(allocated(this%sw_dn))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_clear) IF(allocated(this%sw_up_clear))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_clear) IF(allocated(this%sw_dn_clear))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct) IF(allocated(this%sw_dn_direct))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_band) IF(allocated(this%lw_up_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_band) IF(allocated(this%lw_dn_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_band) IF(allocated(this%sw_up_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_band) IF(allocated(this%sw_dn_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_derivatives) IF(allocated(this%lw_derivatives))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band))
+
+    !$ACC EXIT DATA DELETE(this%lw_up) IF(allocated(this%lw_up)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn) IF(allocated(this%lw_dn)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_clear) IF(allocated(this%lw_up_clear)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_clear) IF(allocated(this%lw_dn_clear)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up) IF(allocated(this%sw_up)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn) IF(allocated(this%sw_dn)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_clear) IF(allocated(this%sw_up_clear)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_clear) IF(allocated(this%sw_dn_clear)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct) IF(allocated(this%sw_dn_direct)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_clear) IF(allocated(this%sw_dn_direct_clear)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_band) IF(allocated(this%lw_up_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_band) IF(allocated(this%lw_dn_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_clear_band) IF(allocated(this%lw_up_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_clear_band) IF(allocated(this%lw_dn_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_band) IF(allocated(this%sw_up_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_band) IF(allocated(this%sw_dn_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_clear_band) IF(allocated(this%sw_up_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_clear_band) IF(allocated(this%sw_dn_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_band) IF(allocated(this%sw_dn_direct_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_clear_band) IF(allocated(this%sw_dn_direct_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_surf_band) IF(allocated(this%sw_dn_surf_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_surf_band) IF(allocated(this%sw_dn_direct_surf_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_surf_clear_band) IF(allocated(this%sw_dn_surf_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_surf_clear_band) IF(allocated(this%sw_dn_direct_surf_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_surf_canopy) IF(allocated(this%lw_dn_surf_canopy)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_diffuse_surf_canopy) IF(allocated(this%sw_dn_diffuse_surf_canopy)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_surf_canopy) IF(allocated(this%sw_dn_direct_surf_canopy)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%cloud_cover_sw) IF(allocated(this%cloud_cover_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%cloud_cover_lw) IF(allocated(this%cloud_cover_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_derivatives) IF(allocated(this%lw_derivatives)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_surf_g) IF(allocated(this%lw_dn_surf_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_dn_surf_clear_g) IF(allocated(this%lw_dn_surf_clear_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_diffuse_surf_g) IF(allocated(this%sw_dn_diffuse_surf_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_surf_g) IF(allocated(this%sw_dn_direct_surf_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_diffuse_surf_clear_g) IF(allocated(this%sw_dn_diffuse_surf_clear_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_direct_surf_clear_g) IF(allocated(this%sw_dn_direct_surf_clear_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_toa_g) IF(allocated(this%lw_up_toa_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_toa_clear_g) IF(allocated(this%lw_up_toa_clear_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_toa_g) IF(allocated(this%sw_dn_toa_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_toa_g) IF(allocated(this%sw_up_toa_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_toa_clear_g) IF(allocated(this%sw_up_toa_clear_g)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_toa_band) IF(allocated(this%lw_up_toa_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_up_toa_clear_band) IF(allocated(this%lw_up_toa_clear_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_dn_toa_band) IF(allocated(this%sw_dn_toa_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_toa_band) IF(allocated(this%sw_up_toa_band)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_up_toa_clear_band) IF(allocated(this%sw_up_toa_clear_band)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_flux:delete_device_flux: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device_flux
+
 end module radiation_flux

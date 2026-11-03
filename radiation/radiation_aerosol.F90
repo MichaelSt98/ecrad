@@ -19,6 +19,7 @@
 module radiation_aerosol
 
   use parkind1, only : jprb
+  use radiation_io, only : radiation_abort
 
   implicit none
   public
@@ -49,10 +50,14 @@ module radiation_aerosol
      logical :: is_direct = .false.
 
    contains
-     procedure :: allocate        => allocate_aerosol_arrays
-     procedure :: allocate_direct => allocate_aerosol_arrays_direct
-     procedure :: deallocate      => deallocate_aerosol_arrays
-     procedure :: out_of_physical_bounds
+      procedure :: allocate        => allocate_aerosol_arrays
+      procedure :: allocate_direct => allocate_aerosol_arrays_direct
+      procedure :: deallocate      => deallocate_aerosol_arrays
+      procedure :: out_of_physical_bounds
+      procedure :: create_device => create_device_aerosol
+      procedure :: update_host   => update_host_aerosol
+      procedure :: update_device => update_device_aerosol
+      procedure :: delete_device => delete_device_aerosol
   end type aerosol_type
 
 contains
@@ -77,6 +82,7 @@ contains
     this%istartlev = istartlev
     this%iendlev   = iendlev
 
+
     if (lhook) call dr_hook('radiation_aerosol:allocate',1,hook_handle)
 
   end subroutine allocate_aerosol_arrays
@@ -94,6 +100,7 @@ contains
     type(config_type),   intent(in)    :: config
     integer, intent(in)                :: ncol  ! Number of columns
     integer, intent(in)                :: istartlev, iendlev ! Level range
+    integer                            :: jband, jlev, jcol
 
     real(jphook) :: hook_handle
 
@@ -113,12 +120,29 @@ contains
       allocate(this%od_lw (config%n_bands_lw,istartlev:iendlev,ncol))
       allocate(this%ssa_lw(config%n_bands_lw,istartlev:iendlev,ncol))
       allocate(this%g_lw  (config%n_bands_lw,istartlev:iendlev,ncol))
+
+      ! for openacc, this is done during create_device
+#if defined(_OPENACC) || defined(OMPGPU)
+#else
       ! If longwave scattering by aerosol is not to be represented,
       ! then the user may wish to just provide absorption optical
       ! depth in od_lw, in which case we must set the following two
       ! variables to zero
-      this%ssa_lw = 0.0_jprb
-      this%g_lw = 0.0_jprb
+
+      ! !$ACC WAIT ! ACCWA (nvhpc 22.7) crashes otherwise
+
+      ! !$ACC PARALLEL DEFAULT(NONE) PRESENT(this, config) ASYNC(1)
+      ! !$ACC LOOP GANG VECTOR COLLAPSE(3)
+      do jcol = 1,ncol
+        do jlev = istartlev,iendlev
+          do jband = 1,config%n_bands_lw
+            this%ssa_lw(jband,jlev,jcol) = 0.0_jprb
+            this%g_lw(jband,jlev,jcol) = 0.0_jprb
+          end do
+        end do
+      end do
+      ! !$ACC END PARALLEL
+#endif
     end if
 
     if (lhook) call dr_hook('radiation_aerosol:allocate_direct',1,hook_handle)
@@ -127,7 +151,7 @@ contains
 
 
   !---------------------------------------------------------------------
-  ! Deallocate arrays
+  ! Deallocate array
   subroutine deallocate_aerosol_arrays(this)
 
     use yomhook,     only : lhook, dr_hook, jphook
@@ -138,35 +162,16 @@ contains
 
     if (lhook) call dr_hook('radiation_aerosol:deallocate',0,hook_handle)
 
-    if (associated(this%mixing_ratio)) then
-      deallocate(this%mixing_ratio)
-      this%mixing_ratio=>null()
-    end if
-    if (associated(this%od_sw)) then
-      deallocate(this%od_sw)
-      this%od_sw=>null()
-    end if
-    if (associated(this%ssa_sw)) then
-      deallocate(this%ssa_sw)
-      this%ssa_sw=>null()
-    end if
-    if (associated(this%g_sw)) then
-      deallocate(this%g_sw)
-      this%g_sw=>null()
-    end if
-    if (associated(this%od_lw)) then
-      deallocate(this%od_lw)
-      this%od_lw=>null()
-    end if
-    if (associated(this%ssa_lw)) then
-      deallocate(this%ssa_lw)
-      this%ssa_lw=>null()
-    end if
-    if (associated(this%g_lw)) then
-      deallocate(this%g_lw)
-      this%g_lw=>null()
-    end if
- 
+    if (associated(this%mixing_ratio)) deallocate(this%mixing_ratio)
+    if (associated(this%od_sw))        deallocate(this%od_sw)
+    if (associated(this%ssa_sw))       deallocate(this%ssa_sw)
+    if (associated(this%g_sw))         deallocate(this%g_sw)
+    if (associated(this%od_lw))        deallocate(this%od_lw)
+    if (associated(this%ssa_lw))       deallocate(this%ssa_lw)
+    if (associated(this%g_lw))         deallocate(this%g_lw)
+    nullify(this%mixing_ratio, this%od_sw, this%ssa_sw, this%g_sw, &
+         &  this%od_lw, this%ssa_lw, this%g_lw)
+
     if (lhook) call dr_hook('radiation_aerosol:deallocate',1,hook_handle)
 
   end subroutine deallocate_aerosol_arrays
@@ -215,5 +220,155 @@ contains
     if (lhook) call dr_hook('radiation_aerosol:out_of_physical_bounds',1,hook_handle)
 
   end function out_of_physical_bounds
-  
+
+  !---------------------------------------------------------------------
+  ! Creates fields on device
+  subroutine create_device_aerosol(this)
+
+    class(aerosol_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+#if defined(OMPGPU)
+    integer :: i,j,k
+#endif
+    select type (this)
+    type is (aerosol_type)
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%od_sw) IF(allocated(this%od_sw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%ssa_sw) IF(allocated(this%ssa_sw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%g_sw) IF(allocated(this%g_sw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%od_lw) IF(allocated(this%od_lw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%ssa_lw) IF(allocated(this%ssa_lw))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%g_lw) IF(allocated(this%g_lw))
+
+    !$ACC ENTER DATA CREATE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%od_sw) IF(allocated(this%od_sw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%ssa_sw) IF(allocated(this%ssa_sw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%g_sw) IF(allocated(this%g_sw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%od_lw) IF(allocated(this%od_lw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%ssa_lw) IF(allocated(this%ssa_lw)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%g_lw) IF(allocated(this%g_lw)) ASYNC(1)
+
+    ! (note that both should always be allocated)
+    if (associated(this%ssa_lw) .or. associated(this%g_lw)) then
+      ! If longwave scattering by aerosol is not to be represented,
+      ! then the user may wish to just provide absorption optical
+      ! depth in od_lw, in which case we must set the following two
+      ! variables to zero
+#if defined(_OPENACC)
+      !$ACC KERNELS DEFAULT(PRESENT) ASYNC(1)
+      this%ssa_lw(:,:,:) = 0.0_jprb
+      this%g_lw(:,:,:) = 0.0_jprb
+      !$ACC END KERNELS
+#endif
+#if defined(OMPGPU)
+      ! Leave this until work distribute is available : PJM 9/12/2025
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
+      do k = 1,SIZE(this%ssa_lw, 3)
+        do j = 1,SIZE(this%ssa_lw, 2)
+          do i = 1,SIZE(this%ssa_lw, 1)
+            this%ssa_lw(i,j,k) = 0.0_jprb
+            this%g_lw(i,j,k) = 0.0_jprb
+          end do
+        end do
+      end do
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+    endif
+    class default
+      call radiation_abort('*** Error: radiation_aerosol:create_device_aerosol: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device_aerosol
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host_aerosol(this)
+
+    class(aerosol_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (aerosol_type)
+    !$OMP TARGET UPDATE FROM(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET UPDATE FROM(this%od_sw) IF(allocated(this%od_sw))
+    !$OMP TARGET UPDATE FROM(this%ssa_sw) IF(allocated(this%ssa_sw))
+    !$OMP TARGET UPDATE FROM(this%g_sw) IF(allocated(this%g_sw))
+    !$OMP TARGET UPDATE FROM(this%od_lw) IF(allocated(this%od_lw))
+    !$OMP TARGET UPDATE FROM(this%ssa_lw) IF(allocated(this%ssa_lw))
+    !$OMP TARGET UPDATE FROM(this%g_lw) IF(allocated(this%g_lw))
+
+    !$ACC UPDATE HOST(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC UPDATE HOST(this%od_sw) IF(allocated(this%od_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%ssa_sw) IF(allocated(this%ssa_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%g_sw) IF(allocated(this%g_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%od_lw) IF(allocated(this%od_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%ssa_lw) IF(allocated(this%ssa_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%g_lw) IF(allocated(this%g_lw)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_aerosol:update_host_aerosol: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host_aerosol
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device_aerosol(this)
+
+    class(aerosol_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (aerosol_type)
+    !$OMP TARGET UPDATE TO(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET UPDATE TO(this%od_sw) IF(allocated(this%od_sw))
+    !$OMP TARGET UPDATE TO(this%ssa_sw) IF(allocated(this%ssa_sw))
+    !$OMP TARGET UPDATE TO(this%g_sw) IF(allocated(this%g_sw))
+    !$OMP TARGET UPDATE TO(this%od_lw) IF(allocated(this%od_lw))
+    !$OMP TARGET UPDATE TO(this%ssa_lw) IF(allocated(this%ssa_lw))
+    !$OMP TARGET UPDATE TO(this%g_lw) IF(allocated(this%g_lw))
+
+    !$ACC UPDATE DEVICE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%od_sw) IF(allocated(this%od_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%ssa_sw) IF(allocated(this%ssa_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%g_sw) IF(allocated(this%g_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%od_lw) IF(allocated(this%od_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%ssa_lw) IF(allocated(this%ssa_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%g_lw) IF(allocated(this%g_lw)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_aerosol:update_device_aerosol: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device_aerosol
+
+  !---------------------------------------------------------------------
+  ! Deletes fields on device
+  subroutine delete_device_aerosol(this)
+
+    class(aerosol_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (aerosol_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%od_sw) IF(allocated(this%od_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%ssa_sw) IF(allocated(this%ssa_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%g_sw) IF(allocated(this%g_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%od_lw) IF(allocated(this%od_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%ssa_lw) IF(allocated(this%ssa_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%g_lw) IF(allocated(this%g_lw))
+
+    !$ACC EXIT DATA DELETE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%od_sw) IF(allocated(this%od_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%ssa_sw) IF(allocated(this%ssa_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%g_sw) IF(allocated(this%g_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%od_lw) IF(allocated(this%od_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%ssa_lw) IF(allocated(this%ssa_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%g_lw) IF(allocated(this%g_lw)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_aerosol:delete_device_aerosol: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device_aerosol
+
 end module radiation_aerosol

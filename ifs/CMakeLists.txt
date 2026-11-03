@@ -49,6 +49,8 @@ endmacro()
 
 ecrad_ifs_process_fypp( radintg_zrgp_mod )
 
+ecrad_select_gpu_sources( ifs_SOURCES )
+
 ecbuild_add_library(
     TARGET ifs.${PREC}
     TYPE OBJECT
@@ -58,13 +60,17 @@ ecbuild_add_library(
     PRIVATE_LIBS
         ecrad.${PREC}
         ecrad_base.${PREC}
+        ecrad_utilities.${PREC}
+    PUBLIC_LIBS
+        $<${HAVE_NVTX}:${NVTX_TARGET}>
+        $<${HAVE_ROCTX}:${ROCTX_LIBRARIES}>
 )
 set_target_properties( ifs.${PREC}
     PROPERTIES
         Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/module_ifs"
 )
 
-if( HAVE_FIELD_API )
+if( HAVE_FIELD_API AND NOT HAVE_GPU )
 
     ecrad_ifs_process_fypp( radiation_scheme_layer_mod )
 

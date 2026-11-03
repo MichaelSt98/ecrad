@@ -19,6 +19,7 @@ module radiation_gas
 
   use parkind1, only : jprb, jprd, jprm
   use radiation_gas_constants
+  use radiation_io, only : nulerr, radiation_abort
 
   implicit none
   public
@@ -62,6 +63,16 @@ module radiation_gas
     ! been provided
     integer :: icode(NMaxGases) = 0
 
+    ! When true, put, put_well_mixed and set_units skip the small device
+    ! updates of iunits, scale_factor, is_present, is_well_mixed and icode
+    ! above, and the caller must issue one update_device_metadata once it has
+    ! finished populating the object. None of the kernels in those routines
+    ! read these arrays on the device, so deferring is safe. Each of the
+    ! skipped updates moves only a few bytes but the host blocks for around
+    ! 70 microseconds afterwards, which dominates the cost of populating the
+    ! gas object.
+    logical :: defer_device_metadata = .false.
+
    contains
      procedure :: allocate   => allocate_gas
      procedure :: deallocate => deallocate_gas
@@ -76,6 +87,12 @@ module radiation_gas
      procedure :: get_scaling
      procedure :: reverse    => reverse_gas
      procedure :: out_of_physical_bounds
+     procedure :: create_device
+     procedure :: update_host
+     procedure :: update_device
+     procedure :: update_device_metadata
+     procedure :: delete_device
+
   end type gas_type
 
 contains
@@ -87,18 +104,34 @@ contains
   subroutine allocate_gas(this, ncol, nlev)
 
     use yomhook, only : lhook, dr_hook, jphook
+    use radiation_io,   only : nulerr, radiation_abort
 
     class(gas_type), intent(inout) :: this
     integer,         intent(in)    :: ncol, nlev
 
+    integer      :: jcol, jlev, jgas
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_gas:allocate',0,hook_handle)
 
-    call this%deallocate()
+    if (associated(this%mixing_ratio)) then
+      write(nulerr,'(a)') 'mixing ratio already allocated'
+      call radiation_abort()
+    endif
 
     allocate(this%mixing_ratio(ncol, nlev, NMaxGases))
-    this%mixing_ratio = 0.0_jprb
+
+    ! for openacc, this is done during create_device
+#if defined(_OPENACC) || defined(OMPGPU)
+#else
+    do jgas = 1,NMaxGases
+      do jlev = 1, nlev
+        do jcol = 1,ncol
+          this%mixing_ratio(jcol,jlev,jgas) = 0.0_jprb
+        end do
+      end do
+    end do
+#endif
 
     this%ncol = ncol
     this%nlev = nlev
@@ -142,11 +175,11 @@ contains
   ! Put gas properties corresponding to gas ID "igas" with units
   ! "iunits"
   subroutine put_gas_check(this, igas, iunits, mixing_ratio_size_1, mixing_ratio_size_2, scale_factor, &
-       istartcol, i1, i2)
+       istartcol, i1, i2, lacc)
 
     use radiation_io,   only : nulerr, radiation_abort
 
-    class(gas_type),      intent(inout) :: this
+    type(gas_type),       intent(inout) :: this
     integer,              intent(in)    :: igas
     integer,              intent(in)    :: iunits
     integer,              intent(in)    :: mixing_ratio_size_1
@@ -154,6 +187,16 @@ contains
     real(jprb), optional, intent(in)    :: scale_factor
     integer,    optional, intent(in)    :: istartcol
     integer,              intent(out)   :: i1, i2
+    logical,    optional, intent(in)    :: lacc
+
+    logical :: llacc, llupd
+
+    if (present(lacc)) then
+      llacc = lacc
+    else
+      llacc = .false.
+    endif
+    llupd = llacc .and. .not. this%defer_device_metadata
 
     ! Check inputs
     if (igas <= IGasNotPresent .or. iunits > NMaxGases) then
@@ -199,16 +242,29 @@ contains
       ! Gas not present until now
       this%ntype = this%ntype + 1
       this%icode(this%ntype) = igas
+#if defined(OMPGPU)
+      !$OMP TARGET UPDATE TO(this%icode(this%ntype:this%ntype)) IF(LLUPD)
+#endif
+      !$ACC UPDATE DEVICE(this%icode(this%ntype:this%ntype)) ASYNC(1) IF(LLUPD)
     end if
     this%is_present(igas) = .true.
     this%iunits(igas) = iunits
     this%is_well_mixed(igas) = .false.
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE TO(this%is_present(igas:igas), this%iunits(igas:igas), this%is_well_mixed(igas:igas)) IF(llupd)
+#endif
+    !$ACC UPDATE DEVICE(this%is_present(igas:igas), this%iunits(igas:igas), this%is_well_mixed(igas:igas)) ASYNC(1) IF(llupd)
 
     if (present(scale_factor)) then
       this%scale_factor(igas) = scale_factor
     else
       this%scale_factor(igas) = 1.0_jprb
     end if
+
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE TO(this%scale_factor(igas:igas)) IF(llupd)
+#endif
+    !$ACC UPDATE DEVICE(this%scale_factor(igas:igas)) ASYNC(1) IF(llupd)
 
   end subroutine put_gas_check
 
@@ -217,92 +273,177 @@ contains
   ! Put gas mixing ratio corresponding to gas ID "igas" with units
   ! "iunits"
   subroutine put_gas_jprd(this, igas, iunits, mixing_ratio, scale_factor, &
-       istartcol)
+       istartcol, lacc)
 
     use yomhook,        only : lhook, dr_hook, jphook
     use radiation_io,   only : nulerr, radiation_abort
 
-    class(gas_type),      intent(inout) :: this
+    class(gas_type),       intent(inout) :: this
     integer,              intent(in)    :: igas
     integer,              intent(in)    :: iunits
     real(jprd),           intent(in)    :: mixing_ratio(:,:)
     real(jprb), optional, intent(in)    :: scale_factor
     integer,    optional, intent(in)    :: istartcol
+    logical,    optional, intent(in)    :: lacc
 
-    integer :: i1, i2, jc, jk
+    integer :: i1, i2
+    logical :: llacc
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (gas_type)
     if (lhook) call dr_hook('radiation_gas:put',0,hook_handle)
 
-    call put_gas_check(this, igas, iunits, size(mixing_ratio, 1), &
-          size(mixing_ratio, 2), scale_factor, istartcol, i1, i2)
+    llacc = .false.
+    if (present(lacc)) llacc = lacc
 
-    do jk = 1,this%nlev
-      do jc = i1,i2
-        this%mixing_ratio(jc,jk,igas) = mixing_ratio(jc-i1+1,jk)
-      end do
-    end do
+    call put_gas_check(this, igas, iunits, size(mixing_ratio, 1), &
+          size(mixing_ratio, 2), scale_factor, istartcol, i1, i2, lacc=llacc)
+
+    call put_gas_jprd_impl(this%ncol, this%nlev, this%mixing_ratio, igas, &
+         size(mixing_ratio, 1), size(mixing_ratio, 2), mixing_ratio, i1, i2, llacc)
 
     if (lhook) call dr_hook('radiation_gas:put',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_gas:put_gas_jprd: unexpected dynamic type')
+    end select
 
   end subroutine put_gas_jprd
-  
+
+  ! The destination arrives as an explicit-shape dummy rather than being
+  ! reached through this%mixing_ratio. Referencing an allocatable component
+  ! inside a target region makes the runtime stage the component's rank-3
+  ! array descriptor to the device, and since the gas structure is reallocated
+  ! on every call to RADIATION_SCHEME the descriptor is never already resident,
+  ! so all ten PUT calls pay for the transfer and the host-side wait that
+  ! follows it. An explicit-shape dummy is passed as a bare address and leaves
+  ! nothing to describe.
+  subroutine put_gas_jprd_impl(ncol, nlev, gas_mixing_ratio, igas, n1, n2, mixing_ratio, i1, i2, llacc)
+
+    integer,        intent(in)    :: ncol, nlev, igas, n1, n2, i1, i2
+    real(jprb),     intent(inout) :: gas_mixing_ratio(ncol, nlev, NMaxGases)
+    real(jprd),     intent(in)    :: mixing_ratio(n1, n2)
+    logical,        intent(in)    :: llacc
+
+    integer :: jc, jk
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    do jk = 1,nlev
+      do jc = i1,i2
+        gas_mixing_ratio(jc,jk,igas) = mixing_ratio(jc-i1+1,jk)
+      end do
+    end do
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+  end subroutine put_gas_jprd_impl
 
   !---------------------------------------------------------------------
   ! Put gas mixing ratio corresponding to gas ID "igas" with units
   ! "iunits"
   subroutine put_gas_jprm(this, igas, iunits, mixing_ratio, scale_factor, &
-       istartcol)
+       istartcol, lacc)
 
     use yomhook,        only : lhook, dr_hook, jphook
     use radiation_io,   only : nulerr, radiation_abort
 
-    class(gas_type),      intent(inout) :: this
+    class(gas_type),       intent(inout) :: this
     integer,              intent(in)    :: igas
     integer,              intent(in)    :: iunits
     real(jprm),           intent(in)    :: mixing_ratio(:,:)
     real(jprb), optional, intent(in)    :: scale_factor
     integer,    optional, intent(in)    :: istartcol
+    logical,    optional, intent(in)    :: lacc
 
-    integer :: i1, i2, jc, jk
+    integer :: i1, i2
+    logical :: llacc
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (gas_type)
     if (lhook) call dr_hook('radiation_gas:put',0,hook_handle)
 
-    call put_gas_check(this, igas, iunits, size(mixing_ratio, 1), &
-          size(mixing_ratio, 2), scale_factor, istartcol, i1, i2)
+    llacc = .false.
+    if (present(lacc)) llacc = lacc
 
-    do jk = 1,this%nlev
-      do jc = i1,i2
-        this%mixing_ratio(jc,jk,igas) = mixing_ratio(jc-i1+1,jk)
-      end do
-    end do
+    call put_gas_check(this, igas, iunits, size(mixing_ratio, 1), &
+          size(mixing_ratio, 2), scale_factor, istartcol, i1, i2, lacc=llacc)
+
+    call put_gas_jprm_impl(this%ncol, this%nlev, this%mixing_ratio, igas, &
+         size(mixing_ratio, 1), size(mixing_ratio, 2), mixing_ratio, i1, i2, llacc)
 
     if (lhook) call dr_hook('radiation_gas:put',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_gas:put_gas_jprm: unexpected dynamic type')
+    end select
 
   end subroutine put_gas_jprm
+
+  ! See put_gas_jprd_impl for why the destination is an explicit-shape dummy.
+  subroutine put_gas_jprm_impl(ncol, nlev, gas_mixing_ratio, igas, n1, n2, mixing_ratio, i1, i2, llacc)
+
+    integer,        intent(in)    :: ncol, nlev, igas, n1, n2, i1, i2
+    real(jprb),     intent(inout) :: gas_mixing_ratio(ncol, nlev, NMaxGases)
+    real(jprm),     intent(in)    :: mixing_ratio(n1, n2)
+    logical,        intent(in)    :: llacc
+
+    integer :: jc, jk
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    do jk = 1,nlev
+      do jc = i1,i2
+        gas_mixing_ratio(jc,jk,igas) = mixing_ratio(jc-i1+1,jk)
+      end do
+    end do
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+  end subroutine put_gas_jprm_impl
 
   !---------------------------------------------------------------------
   ! Put well-mixed gas mixing ratio corresponding to gas ID "igas"
   ! with units "iunits"
   subroutine put_well_mixed_gas(this, igas, iunits, mixing_ratio, &
-       scale_factor, istartcol, iendcol)
+       scale_factor, istartcol, iendcol, lacc)
 
     use yomhook,        only : lhook, dr_hook, jphook
     use radiation_io,   only : nulerr, radiation_abort
 
-    class(gas_type),      intent(inout) :: this
+    class(gas_type),       intent(inout) :: this
     integer,              intent(in)    :: igas
     integer,              intent(in)    :: iunits
     real(jprb),           intent(in)    :: mixing_ratio
     real(jprb), optional, intent(in)    :: scale_factor
     integer,    optional, intent(in)    :: istartcol, iendcol
+    logical,    optional, intent(in)    :: lacc
 
     real(jphook) :: hook_handle
 
+    logical :: llacc, llupd
     integer :: i1, i2, jc, jk
+
+    select type (this)
+    type is (gas_type)
+    if (present(lacc)) then
+      llacc = lacc
+    else
+      llacc = .false.
+    endif
+    llupd = llacc .and. .not. this%defer_device_metadata
 
     if (lhook) call dr_hook('radiation_gas:put_well_mixed',0,hook_handle)
 
@@ -347,26 +488,69 @@ contains
       ! Gas not present until now
       this%ntype = this%ntype + 1
       this%icode(this%ntype) = igas
+#if defined(OMPGPU)
+      !$OMP TARGET UPDATE TO(this%icode(this%ntype:this%ntype)) IF(LLUPD)
+#endif
+      !$ACC UPDATE DEVICE(this%icode(this%ntype:this%ntype)) ASYNC(1) IF(LLUPD)
     end if
+
     ! Map uses a negative value to indicate a well-mixed value
     this%is_present(igas)              = .true.
     this%iunits(igas)                  = iunits
     this%is_well_mixed(igas)           = .true.
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE TO(this%is_present(igas:igas), this%iunits(igas:igas), this%is_well_mixed(igas:igas)) IF(LLUPD)
+#endif
+    !$ACC UPDATE DEVICE(this%is_present(igas:igas), this%iunits(igas:igas), this%is_well_mixed(igas:igas)) ASYNC(1) if(LLUPD)
 
-    do jk = 1,this%nlev
-      do jc = i1,i2
-        this%mixing_ratio(jc,jk,igas) = mixing_ratio
-      end do
-    end do
+    call put_well_mixed_gas_impl(this%ncol, this%nlev, this%mixing_ratio, igas, &
+         mixing_ratio, i1, i2, llacc)
+
     if (present(scale_factor)) then
       this%scale_factor(igas) = scale_factor
     else
       this%scale_factor(igas) = 1.0_jprb
     end if
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE TO(this%scale_factor(igas:igas)) IF(LLUPD)
+#endif
+    !$ACC UPDATE DEVICE(this%scale_factor(igas:igas)) ASYNC(1) IF(LLUPD)
 
     if (lhook) call dr_hook('radiation_gas:put_well_mixed',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_gas:put_well_mixed_gas: unexpected dynamic type')
+    end select
 
   end subroutine put_well_mixed_gas
+
+
+  !---------------------------------------------------------------------
+  ! See put_gas_jprd_impl for why the destination is an explicit-shape dummy.
+  subroutine put_well_mixed_gas_impl(ncol, nlev, gas_mixing_ratio, igas, mixing_ratio, i1, i2, llacc)
+
+    integer,    intent(in)    :: ncol, nlev, igas, i1, i2
+    real(jprb), intent(inout) :: gas_mixing_ratio(ncol, nlev, NMaxGases)
+    real(jprb), intent(in)    :: mixing_ratio
+    logical,    intent(in)    :: llacc
+
+    integer :: jc, jk
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    do jk = 1,nlev
+      do jc = i1,i2
+        gas_mixing_ratio(jc,jk,igas) = mixing_ratio
+      end do
+    end do
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+  end subroutine put_well_mixed_gas_impl
 
 
   !---------------------------------------------------------------------
@@ -409,19 +593,30 @@ contains
   ! scale_factor=1.0e-6. If the gas concentrations were currently
   ! dimensionless volume mixing ratios, then the values would be
   ! internally divided by 1.0e-6.
-  subroutine set_units_gas(this, iunits, igas, scale_factor)
-    class(gas_type),      intent(inout) :: this
+  recursive subroutine set_units_gas(this, iunits, igas, scale_factor, lacc)
+    class(gas_type),       intent(inout) :: this
     integer,              intent(in)    :: iunits
     integer,    optional, intent(in)    :: igas
     real(jprb), optional, intent(in)    :: scale_factor
+    logical,    optional, intent(in)    :: lacc
 
-    integer :: jg, jlev, jcol, ig
+    integer :: jg, jcol, jlev
 
     ! Scaling factor to convert from old to new
     real(jprb) :: sf
 
     ! New scaling factor to store inside the gas object
     real(jprb) :: new_sf
+    logical :: llacc, llupd
+
+    select type (this)
+    type is (gas_type)
+    if (present(lacc)) then
+      llacc = lacc
+    else
+      llacc = .false.
+    endif
+    llupd = llacc .and. .not. this%defer_device_metadata
 
     if (present(scale_factor)) then
       ! "sf" is the scaling to be applied now to the numbers (and may
@@ -448,53 +643,86 @@ contains
         sf = sf * this%scale_factor(igas)
 
         if (sf /= 1.0_jprb) then
-
-          do jlev=1,this%nlev
-            do jcol=1,this%ncol
-              this%mixing_ratio(jcol,jlev,igas) = this%mixing_ratio(jcol,jlev,igas) * sf
-            end do
-          end do
+          call scale_gas_impl(this%ncol, this%nlev, this%mixing_ratio, igas, sf, llacc)
         end if
         ! Store the new units and scale factor for this gas inside the
         ! gas object
-        this%iunits(igas) = iunits
-        this%scale_factor(igas) = new_sf
+        if (iunits /= this%iunits(igas) .or. new_sf /= this%scale_factor(igas)) then
+          this%iunits(igas) = iunits
+          this%scale_factor(igas) = new_sf
+#if defined(OMPGPU)
+          !$OMP TARGET UPDATE TO(this%iunits(igas:igas), this%scale_factor(igas:igas)) IF(llupd)
+#endif
+          !$ACC UPDATE DEVICE(this%iunits(igas:igas),this%scale_factor(igas:igas)) ASYNC(1) IF(llupd)
+        endif
       end if
     else
       ! "Inlined" function in loop instead of recursive call to itself
       do jg = 1,this%ntype
-        sf     = 1.0_jprb / new_sf
-
-        ig = this%icode(jg)
-        if (this%is_present(ig)) then
-          if (iunits == IMassMixingRatio &
-               &   .and. this%iunits(ig) == IVolumeMixingRatio) then
-            sf = sf * GasMolarMass(ig) / AirMolarMass
-          else if (iunits == IVolumeMixingRatio &
-               &   .and. this%iunits(ig) == IMassMixingRatio) then
-            sf = sf * AirMolarMass / GasMolarMass(ig)
-          end if
-          sf = sf * this%scale_factor(ig)
-
-          if (sf /= 1.0_jprb) then
-
-            do jlev=1,this%nlev
-              do jcol=1,this%ncol
-                this%mixing_ratio(jcol,jlev,ig) = this%mixing_ratio(jcol,jlev,ig) * sf
-              end do
-            end do
-          end if
-          ! Store the new units and scale factor for this gas inside the
-          ! gas object
-          this%iunits(ig) = iunits
-          this%scale_factor(ig) = new_sf
-        end if
+        call this%set_units(iunits, igas=this%icode(jg), scale_factor=new_sf, lacc=llacc)
       end do
     end if
+    class default
+      call radiation_abort('*** Error: radiation_gas:set_units_gas: unexpected dynamic type')
+    end select
 
   end subroutine set_units_gas
 
-  
+
+  !---------------------------------------------------------------------
+  ! See put_gas_jprd_impl for why the array is an explicit-shape dummy.
+  subroutine scale_gas_impl(ncol, nlev, gas_mixing_ratio, igas, sf, llacc)
+
+    integer,    intent(in)    :: ncol, nlev, igas
+    real(jprb), intent(inout) :: gas_mixing_ratio(ncol, nlev, NMaxGases)
+    real(jprb), intent(in)    :: sf
+    logical,    intent(in)    :: llacc
+
+    integer :: jcol, jlev
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    do jlev = 1,nlev
+      do jcol = 1,ncol
+        gas_mixing_ratio(jcol,jlev,igas) = gas_mixing_ratio(jcol,jlev,igas) * sf
+      enddo
+    enddo
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+  end subroutine scale_gas_impl
+
+
+  !---------------------------------------------------------------------
+  ! Send the whole of the metadata arrays to the device in one go. This is
+  ! the counterpart of defer_device_metadata: populating the gas object
+  ! otherwise issues around sixty updates of a single element each, and the
+  ! host blocks after every one of them.
+  subroutine update_device_metadata(this, lacc)
+
+    class(gas_type), intent(in) :: this
+    logical, optional, intent(in) :: lacc
+
+    logical :: llacc
+
+    llacc = .true.
+    if (present(lacc)) llacc = lacc
+
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE TO(this%iunits, this%scale_factor, this%is_present, &
+    !$OMP&                 this%is_well_mixed, this%icode) IF(LLACC)
+#endif
+    !$ACC UPDATE DEVICE(this%iunits, this%scale_factor, this%is_present, &
+    !$ACC&              this%is_well_mixed, this%icode) ASYNC(1) IF(LLACC)
+
+  end subroutine update_device_metadata
+
+
   !---------------------------------------------------------------------
   ! Return a vector indicating the scaling that one would need to
   ! apply to each gas in order to obtain the dimension units in
@@ -504,7 +732,7 @@ contains
     integer,         intent(in)  :: iunits
     real(jprb),      intent(out) :: scaling(NMaxGases)
     integer :: jg
-    
+
     scaling = this%scale_factor
     do jg = 1,NMaxGases
       if (iunits == IMassMixingRatio .and. this%iunits(jg) == IVolumeMixingRatio) then
@@ -513,10 +741,10 @@ contains
         scaling(jg) = scaling(jg) * AirMolarMass / GasMolarMass(jg)
       end if
     end do
-    
+
   end subroutine get_scaling
 
-  
+
   !---------------------------------------------------------------------
   ! Assert that gas mixing ratio units are "iunits", applying to gas
   ! with ID "igas" if present, otherwise to all gases. Otherwise the
@@ -548,7 +776,7 @@ contains
     if (present(istatus)) then
       istatus = .true.
     end if
-    
+
     if (present(igas)) then
       if (this%is_present(igas)) then
         if (iunits /= this%iunits(igas)) then
@@ -584,24 +812,40 @@ contains
   ! "iunits" and return as a 2D array of dimensions (ncol,nlev).  The
   ! array will contain zeros if the gas is not stored.
   subroutine get_gas(this, igas, iunits, mixing_ratio, scale_factor, &
-       &   istartcol)
+       &   istartcol, lacc)
 
     use yomhook,        only : lhook, dr_hook, jphook
     use radiation_io,   only : nulerr, radiation_abort
 
-    class(gas_type),      intent(in)  :: this
+    class(gas_type),       intent(in)  :: this
     integer,              intent(in)  :: igas
     integer,              intent(in)  :: iunits
     real(jprb),           intent(out) :: mixing_ratio(:,:)
     real(jprb), optional, intent(in)  :: scale_factor
     integer,    optional, intent(in)  :: istartcol
+    logical,    optional, intent(in)    :: lacc
 
     real(jprb)                        :: sf
-    integer                           :: i1, i2
+    integer                           :: i1, i2, nlev
 
+    logical :: llacc
+
+#if defined(_OPENACC) || defined(OMPGPU)
+#else
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_gas:get',0,hook_handle)
+#endif
+
+    select type (this)
+    type is (gas_type)
+    if (present(lacc)) then
+      llacc = lacc
+    else
+      llacc = .false.
+    endif
+
+    nlev = size(this%mixing_ratio, 2)
 
     if (present(scale_factor)) then
       sf = scale_factor
@@ -617,6 +861,8 @@ contains
 
     i2 = i1 + size(mixing_ratio,1) - 1
 
+#if defined(_OPENACC) || defined(OMPGPU)
+#else
     if (i1 < 1 .or. i2 < 1 .or. i1 > this%ncol .or. i2 > this%ncol) then
       write(nulerr,'(a,i0,a,i0,a,i0)') '*** Error: attempt to get columns indexed ', &
            &   i1, ' to ', i2, ' from array indexed 1 to ', this%ncol
@@ -629,29 +875,91 @@ contains
            &  ' levels'
       call radiation_abort()
     end if
+#endif
 
-    if (.not. this%is_present(igas)) then
-      mixing_ratio = 0.0_jprb
-    else
-      if (iunits == IMassMixingRatio &
-           &   .and. this%iunits(igas) == IVolumeMixingRatio) then
-        sf = sf * GasMolarMass(igas) / AirMolarMass
-      else if (iunits == IVolumeMixingRatio &
-           &   .and. this%iunits(igas) == IMassMixingRatio) then
-        sf = sf * AirMolarMass / GasMolarMass(igas)
-      end if
-      sf = sf * this%scale_factor(igas)
+    call get_gas_impl(this, igas, iunits, size(mixing_ratio,1), nlev, mixing_ratio, &
+         i1, i2, sf, llacc)
 
-      if (sf /= 1.0_jprb) then
-        mixing_ratio = this%mixing_ratio(i1:i2,:,igas) * sf
-      else
-        mixing_ratio = this%mixing_ratio(i1:i2,:,igas)
-      end if
-    end if
-
+    class default
+      call radiation_abort('*** Error: radiation_gas:get_gas: unexpected dynamic type')
+    end select
+#if defined(_OPENACC) || defined(OMPGPU)
+#else
     if (lhook) call dr_hook('radiation_gas:get',1,hook_handle)
+#endif
 
   end subroutine get_gas
+
+  subroutine get_gas_impl(this, igas, iunits, ncol_out, nlev, mixing_ratio, &
+       i1, i2, sf, llacc)
+
+    type(gas_type), intent(in)    :: this
+    integer,        intent(in)    :: igas, iunits, ncol_out, nlev, i1, i2
+    real(jprb),     intent(out)   :: mixing_ratio(ncol_out, nlev)
+    real(jprb),     intent(inout) :: sf
+    logical,        intent(in)    :: llacc
+
+    integer :: jcol, jlev
+
+    !$ACC PARALLEL IF(LLACC)
+    if (.not. this%is_present(igas)) then
+#if defined(OMPGPU) && defined(__amdflang__)
+       IF (LLACC) THEN
+          write(0,*) "Can't run this on device until after AFAR 7.1. The OMP offload pragmas are commented out for now. Exiting in case this code is entered at runtime."
+          STOP
+       ENDIF
+#endif
+       !!$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+       !$ACC LOOP GANG VECTOR COLLAPSE(2)
+       do jcol = 1,ncol_out
+          do jlev = 1,nlev
+             mixing_ratio(jcol,jlev) = 0.0_jprb
+          end do
+       end do
+       !!$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+    else
+       if (iunits == IMassMixingRatio &
+            &   .and. this%iunits(igas) == IVolumeMixingRatio) then
+          sf = sf * GasMolarMass(igas) / AirMolarMass
+       else if (iunits == IVolumeMixingRatio &
+            &   .and. this%iunits(igas) == IMassMixingRatio) then
+          sf = sf * AirMolarMass / GasMolarMass(igas)
+       end if
+       sf = sf * this%scale_factor(igas)
+
+       if (sf /= 1.0_jprb) then
+#if defined(OMPGPU) && defined(__amdflang__)
+          IF (LLACC) THEN
+             write(0,*) "Can't run this on device until after AFAR 7.1. The OMP offload pragmas are commented out for now. Exiting in case this code is entered at runtime."
+             STOP
+          ENDIF
+#endif
+          !!$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+          !$ACC LOOP GANG VECTOR COLLAPSE(2)
+          do jcol = i1,i2
+             do jlev = 1,nlev
+                mixing_ratio(jcol-i1+1,jlev) = this%mixing_ratio(jcol,jlev,igas) * sf
+             end do
+          end do
+          !!$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+       else
+#if defined(OMPGPU)
+          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+          !$ACC LOOP GANG VECTOR COLLAPSE(2)
+          do jcol = i1,i2
+             do jlev = 1,nlev
+                mixing_ratio(jcol-i1+1,jlev) = this%mixing_ratio(jcol,jlev,igas)
+             end do
+          end do
+#if defined(OMPGPU)
+          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+       end if
+    end if
+    !$ACC END PARALLEL
+
+  end subroutine get_gas_impl
 
 
   !---------------------------------------------------------------------
@@ -716,5 +1024,98 @@ contains
     if (lhook) call dr_hook('radiation_gas:out_of_physical_bounds',1,hook_handle)
 
   end function out_of_physical_bounds
+
+  !---------------------------------------------------------------------
+  ! creates fields on device
+  subroutine create_device(this)
+
+    class(gas_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+#if defined(OMPGPU)
+    integer :: i,j,k
+#endif
+    select type (this)
+    type is (gas_type)
+
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$ACC ENTER DATA CREATE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+
+#if defined(_OPENACC)
+    !$ACC KERNELS DEFAULT(PRESENT) ASYNC(1)
+    this%mixing_ratio(:,:,:) = 0.0_jprb
+    !$ACC END KERNELS
+#endif
+#if defined(OMPGPU)
+    ! Leave this until work distribute is available : PJM 9/12/2025
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
+    do k = 1,SIZE(this%mixing_ratio, 3)
+      do j = 1,SIZE(this%mixing_ratio, 2)
+        do i = 1,SIZE(this%mixing_ratio, 1)
+           this%mixing_ratio(i,j,k) = 0.0_jprb
+        end do
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+    class default
+      call radiation_abort('*** Error: radiation_gas:create_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host(this)
+
+    class(gas_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (gas_type)
+    !$OMP TARGET UPDATE FROM(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+
+    !$ACC UPDATE HOST(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_gas:update_host: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device(this)
+
+    class(gas_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (gas_type)
+    !$OMP TARGET UPDATE TO(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+
+    !$ACC UPDATE DEVICE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_gas:update_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device
+
+  !---------------------------------------------------------------------
+  ! deletes fields on device
+  subroutine delete_device(this)
+
+    class(gas_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (gas_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+
+    !$ACC EXIT DATA DELETE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_gas:delete_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device
 
 end module radiation_gas

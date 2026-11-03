@@ -18,6 +18,7 @@
 module radiation_cloud_optics_data
 
   use parkind1, only : jprb
+  use radiation_io, only : radiation_abort
 
   implicit none
   public
@@ -40,6 +41,10 @@ module radiation_cloud_optics_data
 
    contains
      procedure :: setup => setup_cloud_optics
+     procedure :: create_device
+     procedure :: update_host
+     procedure :: update_device
+     procedure :: delete_device
 
   end type cloud_optics_type
 
@@ -109,5 +114,118 @@ contains
     if (lhook) call dr_hook('radiation_cloud_optics_data:setup',1,hook_handle)
 
   end subroutine setup_cloud_optics
+
+
+  !---------------------------------------------------------------------
+  ! creates fields on device
+  subroutine create_device(this)
+
+    class(cloud_optics_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (cloud_optics_type)
+    !$OMP TARGET ENTER DATA MAP(TO:this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen))
+    !$OMP TARGET ENTER DATA MAP(TO:this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen))
+
+    !$ACC ENTER DATA COPYIN(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud_optics_data:create_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host(this)
+
+    class(cloud_optics_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (cloud_optics_type)
+    !$OMP TARGET UPDATE FROM(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw))
+    !$OMP TARGET UPDATE FROM(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw))
+    !$OMP TARGET UPDATE FROM(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw))
+    !$OMP TARGET UPDATE FROM(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw))
+    !$OMP TARGET UPDATE FROM(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen))
+    !$OMP TARGET UPDATE FROM(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen))
+
+    !$ACC UPDATE HOST(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen)) ASYNC(1)
+    !$ACC UPDATE HOST(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud_optics_data:update_host: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device(this)
+
+    class(cloud_optics_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (cloud_optics_type)
+    !$OMP TARGET UPDATE TO(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw))
+    !$OMP TARGET UPDATE TO(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw))
+    !$OMP TARGET UPDATE TO(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw))
+    !$OMP TARGET UPDATE TO(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw))
+    !$OMP TARGET UPDATE TO(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen))
+    !$OMP TARGET UPDATE TO(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen))
+
+    !$ACC UPDATE DEVICE(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud_optics_data:update_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device
+
+  !---------------------------------------------------------------------
+  ! deletes fields on device
+  subroutine delete_device(this)
+
+    class(cloud_optics_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (cloud_optics_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen))
+
+    !$ACC EXIT DATA DELETE(this%liq_coeff_lw) IF(allocated(this%liq_coeff_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%liq_coeff_sw) IF(allocated(this%liq_coeff_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%ice_coeff_lw) IF(allocated(this%ice_coeff_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%ice_coeff_sw) IF(allocated(this%ice_coeff_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%liq_coeff_gen) IF(allocated(this%liq_coeff_gen)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%ice_coeff_gen) IF(allocated(this%ice_coeff_gen)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud_optics_data:delete_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device
 
 end module radiation_cloud_optics_data

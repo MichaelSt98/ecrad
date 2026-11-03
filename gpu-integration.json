@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "paused_for_rrtmg_layout_decision",
+  "status": "paused_for_cpu_numerical_regression",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -106,12 +106,64 @@
     },
     "recommended_direction": "Preserve main's CPU implementation and coefficient layouts; adapt GPU kernels and interfaces in validated stages, retaining backend-specific output layouts only where justified.",
     "alternative": "Select legacy GPU coefficient and kernel layouts at build time while retaining main's CPU path, accepting additional layout-dependent maintenance.",
-    "decision": null
+    "decision": "Approved by the user: preserve main CPU/coefficient layouts and allow specialised GPU output/workspace layouts where justified."
   },
   "validation": {
-    "physics_changes_made": false,
-    "builds_run": false,
-    "numerical_tests_run": false,
-    "performance_tests_run": false
+    "physics_changes_made": true,
+    "builds_run": true,
+    "numerical_tests_run": true,
+    "performance_tests_run": false,
+    "compiler": "NVHPC nvfortran 24.5-1",
+    "configuration": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "ENABLE_FIAT": "OFF",
+      "ENABLE_FIELD_API": "OFF",
+      "ENABLE_SINGLE_PRECISION": "ON",
+      "ENABLE_DOUBLE_PRECISION": "ON",
+      "ENABLE_BITIDENTITY_TESTING": "ON",
+      "OMP_NUM_THREADS": "1",
+      "ctest_parallelism": 8
+    },
+    "main_reference": {
+      "commit": "54fe9cb77abb63adf7f746f0adee449e73291d79",
+      "build_directory": "/etc/ecmwf/ssd/ssd1/ecinteractive/nams-ecinteractive/tmpdirs/nams.33430534/opencode/ecrad-gpu-reference-main-build",
+      "tests_passed": 172,
+      "tests_failed": 0
+    },
+    "prototype": {
+      "backend": "CPU",
+      "build_directory": "/etc/ecmwf/ssd/ssd1/ecinteractive/nams-ecinteractive/tmpdirs/nams.33430534/opencode/ecrad-main-gpu-cpu-nvhpc",
+      "build_succeeded": true,
+      "tests_passed": 129,
+      "tests_failed": 43,
+      "observations": [
+        "McICA longwave results include nonphysical values and overflow; this is not a tolerance-level difference.",
+        "Failures affect RRTMG and ecCKD McICA configurations and some driver comparisons.",
+        "Tripleclouds, cloudless and several no-aerosol configurations pass.",
+        "Both precisions are affected; the root cause has not been isolated."
+      ],
+      "test_logs": "Testing/Temporary/LastTest.log and LastTestsFailed.log in the prototype build directory"
+    },
+    "gpu_builds_run": false,
+    "gpu_device_tests_run": false,
+    "fortls": "Diagnostics attempted on radiation_thermodynamics.F90 and rrtm_taumol1_gpu.F90; the launcher returned exit code 1 without diagnostics.",
+    "diff_check": "git diff --cached --check reports inherited whitespace issues in imported GPU sources; this checkpoint is not style-clean."
+  },
+  "prototype_scope": {
+    "baseline_source": "origin/master-omp at b97c15f",
+    "history_strategy": "Local merge prototype retains original baseline GPU history; no fork tiling topics have been integrated yet.",
+    "cpu_layout": "Main CPU RRTMG routines and coefficient initialisation retained; accelerator routines selected separately by CMake.",
+    "gpu_layout_adaptation": "An unvalidated preprocessor access-permutation header adapts accelerator coefficient references to main tables.",
+    "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
+    "standalone_driver_batching_implemented": false,
+    "known_incomplete_work": [
+      "Isolate CPU numerical regression before accepting this merge prototype.",
+      "Reconcile pointer-based public containers with accelerator mapping and ownership code.",
+      "Consolidate duplicated driver and integration sources after validation.",
+      "Reconcile accelerator build selection with FIELD_API and the Makefile build.",
+      "Validate coefficient access adaptation and accelerator interfaces on device.",
+      "Integrate ACC optimisations, full-pipeline tiling and RAPS coupling fixes with provenance.",
+      "Complete cross-compiler, numerical, concurrency, memory and performance checks."
+    ]
   }
 }

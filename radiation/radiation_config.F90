@@ -46,6 +46,7 @@ module radiation_config
   use radiation_cloud_cover,         only : OverlapName, &
        & IOverlapMaximumRandom, IOverlapExponentialRandom, IOverlapExponential
   use radiation_ecckd,               only : ckd_model_type
+  use radiation_io,                  only : nulerr, radiation_abort
 
   implicit none
   public
@@ -58,13 +59,14 @@ module radiation_config
   ! for both
   enum, bind(c)
      enumerator ISolverCloudless, ISolverHomogeneous, ISolverMcICA, &
-          &     ISolverSpartacus, ISolverTripleclouds
+          &     ISolverSpartacus, ISolverTripleclouds, ISolverMcICAACC
   end enum
-  character(len=*), parameter :: SolverName(0:4) = (/ 'Cloudless   ', &
+  character(len=*), parameter :: SolverName(0:5) = (/ 'Cloudless   ', &
        &                                              'Homogeneous ', &
        &                                              'McICA       ', &
        &                                              'SPARTACUS   ', &
-       &                                              'Tripleclouds' /)
+       &                                              'Tripleclouds', &
+       &                                              'McICA ACC   ' /)
 
   ! SPARTACUS shortwave solver can treat the reflection of radiation
   ! back up into different regions in various ways
@@ -253,8 +255,13 @@ module radiation_config
     ! Maximum total optical depth of a cloudy region for stability:
     ! optical depth will be capped at this value in the SPARTACUS
     ! solvers
-    real(jprb) :: max_cloud_od = 16.0_jprb
-
+#ifdef PARKIND1_SINGLE
+    real(jprb) :: max_cloud_od_lw = 10.3_jprb
+    real(jprb) :: max_cloud_od_sw = 11.5_jprb
+#else
+    real(jprb) :: max_cloud_od_sw = 16.0_jprb
+    real(jprb) :: max_cloud_od_lw = 16.0_jprb
+#endif
     ! How much longwave scattering is included?
     logical :: do_lw_cloud_scattering = .true.
     logical :: do_lw_aerosol_scattering = .true.
@@ -383,11 +390,15 @@ module radiation_config
     ! high for the clear-sky regions in layers with high cloud
     ! fraction.  For stability reasons it is necessary to provide a
     ! maximum possible 3D transfer rate.
+#ifdef PARKIND1_SINGLE
+    real(jprb) :: max_3d_transfer_rate = 2.0_jprb
+#else
     real(jprb) :: max_3d_transfer_rate = 10.0_jprb
-
+#endif
     ! It has also sometimes been found necessary to set a minimum
     ! cloud effective size for stability (metres)
-    real(jprb) :: min_cloud_effective_size = 100.0_jprb
+    real(jprb) :: min_cloud_effective_size = 500.0_jprb
+! from IFS, previously 100. 500 seems necessary for stability
 
     ! Given a horizontal migration distance, there is still
     ! uncertainty about how much entrapment occurs associated with how
@@ -646,6 +657,11 @@ module radiation_config
      procedure :: consolidate_sw_albedo_intervals
      procedure :: consolidate_lw_emiss_intervals
 
+     procedure :: create_device
+     procedure :: update_host
+     procedure :: update_device
+     procedure :: delete_device
+
   end type config_type
 
 !  procedure, private :: print_logical, print_real, print_int
@@ -698,7 +714,7 @@ contains
     real(jprb):: mono_lw_single_scattering_albedo, mono_sw_single_scattering_albedo
     real(jprb):: mono_lw_asymmetry_factor, mono_sw_asymmetry_factor
     real(jprb):: cloud_inhom_decorr_scaling, cloud_fraction_threshold
-    real(jprb):: clear_to_thick_fraction, max_gas_od_3d, max_cloud_od
+    real(jprb):: clear_to_thick_fraction, max_gas_od_3d, max_cloud_od, max_cloud_od_lw, max_cloud_od_sw
     real(jprb):: cloud_mixing_ratio_threshold, overhead_sun_factor
     real(jprb):: max_3d_transfer_rate, min_cloud_effective_size
     real(jprb):: overhang_factor, encroachment_scaling
@@ -749,7 +765,7 @@ contains
          &  sw_solver_name, lw_solver_name, use_beta_overlap, use_vectorizable_generator, &
          &  use_expm_everywhere, iverbose, iverbosesetup, &
          &  cloud_inhom_decorr_scaling, cloud_fraction_threshold, &
-         &  clear_to_thick_fraction, max_gas_od_3d, max_cloud_od, &
+         &  clear_to_thick_fraction, max_gas_od_3d, max_cloud_od, max_cloud_od_lw, max_cloud_od_sw, &
          &  cloud_mixing_ratio_threshold, overhead_sun_factor, &
          &  n_aerosol_types, i_aerosol_type_map, use_aerosols, &
          &  mono_lw_wavelength, mono_lw_total_od, mono_sw_total_od, &
@@ -814,7 +830,9 @@ contains
     clear_to_thick_fraction = this%clear_to_thick_fraction
     overhead_sun_factor = this%overhead_sun_factor
     max_gas_od_3d = this%max_gas_od_3d
-    max_cloud_od = this%max_cloud_od
+    max_cloud_od = -1.0_jprb
+    max_cloud_od_lw = this%max_cloud_od_lw
+    max_cloud_od_sw = this%max_cloud_od_sw
     max_3d_transfer_rate = this%max_3d_transfer_rate
     min_cloud_effective_size = this%min_cloud_effective_size
     cloud_type_name = this%cloud_type_name
@@ -965,7 +983,18 @@ contains
     this%clear_to_thick_fraction = clear_to_thick_fraction
     this%overhead_sun_factor = overhead_sun_factor
     this%max_gas_od_3d = max_gas_od_3d
-    this%max_cloud_od = max_cloud_od
+
+    ! Determine maximum total optical depth of a cloudy region for stability:
+    if (max_cloud_od >= 0.0_jprb) then
+      ! - firstly, try the general value max_cloud_od
+      this%max_cloud_od_lw = max_cloud_od
+      this%max_cloud_od_sw = max_cloud_od
+    else
+      ! - then the band-specific values
+      this%max_cloud_od_lw = max_cloud_od_lw
+      this%max_cloud_od_sw = max_cloud_od_sw
+    end if
+
     this%max_3d_transfer_rate = max_3d_transfer_rate
     this%min_cloud_effective_size = max(1.0e-6_jprb, min_cloud_effective_size)
     this%cloud_type_name = cloud_type_name
@@ -1328,8 +1357,10 @@ contains
     end if
 
     ! McICA solver currently can't store full profiles of spectral fluxes
-    if (this%i_solver_sw == ISolverMcICA) then
-      write(nulout, '(a)') 'Warning: McICA solver cannot store full profiles of spectral fluxes'
+    if (this%i_solver_sw == ISolverMcICA .or. this%i_solver_sw == ISolverMcICAACC) then
+      if (this%iverbosesetup >= 1) then
+        write(nulout, '(a)') 'Warning: McICA solver cannot store full profiles of spectral fluxes'
+      end if
       this%do_save_spectral_flux = .false.
     end if
 
@@ -1573,8 +1604,10 @@ contains
            &  .or. this%i_solver_lw == ISolverSpartacus) then
         write(nulout, '(a)') '  SPARTACUS options:'
         call print_integer('    Number of regions', 'n_regions', this%nregions)
-        call print_real('    Max cloud optical depth per layer', &
-             &   'max_cloud_od', this%max_cloud_od)
+        call print_real('    Max cloud optical depth per layer (LW)', &
+             &   'max_cloud_od_lw', this%max_cloud_od_lw)
+        call print_real('    Max cloud optical depth per layer (SW)', &
+             &   'max_cloud_od_sw', this%max_cloud_od_sw)
         call print_enum('    Shortwave entrapment is', EntrapmentName, &
              &          'i_3d_sw_entrapment', this%i_3d_sw_entrapment)
         call print_logical('    Multilayer longwave horizontal transport is', &
@@ -1602,7 +1635,9 @@ contains
         end if
 
       else if (this%i_solver_sw == ISolverMcICA &
-           &  .or. this%i_solver_lw == ISolverMcICA) then
+           &  .or. this%i_solver_lw == ISolverMcICA &
+           &  .or. this%i_solver_sw == ISolverMcICAACC &
+           &  .or. this%i_solver_lw == ISolverMcICAACC ) then
         call print_logical('  Use vectorizable McICA cloud generator', &
              &   'use_vectorizable_generator', this%use_vectorizable_generator)
       end if
@@ -2195,5 +2230,252 @@ contains
     write(str, '(a,a,a,a)') message_str, ' "', trim(enum_str(val)), '"'
     write(nulout,'(a,a,a,a,i0,a)') str, ' (', name, '=', val,')'
   end subroutine print_enum
+
+  !---------------------------------------------------------------------
+  ! creates fields on device
+  subroutine create_device(this)
+
+    class(config_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (config_type)
+#if defined(OMPGPU)
+    ! cloud_optics, aerosol_optics and pdf_sampler are non-allocatable
+    ! components, so they live inside this struct's own storage and mapping
+    ! them below marks part of that storage present. Any later target region
+    ! that names config then implicitly maps a struct that is only partially
+    ! present, which NVHPC rejects outright. Mapping the whole struct up front
+    ! makes those later maps find it fully present and merely bump the
+    ! reference count. It has to come first: doing it after the components
+    ! hits the same partial-present error. OpenACC does not need this because
+    ! its compute regions use DEFAULT(PRESENT) and never map config at all.
+    !
+    ! Must be inside the select type: outside it "this" is class(config_type),
+    ! so the map takes the 40-byte class descriptor on the stack rather than
+    ! the struct, leaving an unmatched entry that outlives the frame and later
+    ! collides with a stack array at the same address.
+    !$OMP TARGET ENTER DATA MAP(TO:this)
+#endif
+    !$OMP TARGET ENTER DATA MAP(TO:this%g_frac_sw) IF(allocated(this%g_frac_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%g_frac_lw) IF(allocated(this%g_frac_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights))
+    !$OMP TARGET ENTER DATA MAP(TO:this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_spec_from_reordered_g_lw) IF(associated(this%i_spec_from_reordered_g_lw))
+    !$OMP TARGET ENTER DATA MAP(TO:this%i_spec_from_reordered_g_sw) IF(associated(this%i_spec_from_reordered_g_sw))
+
+    !$ACC ENTER DATA COPYIN(this%g_frac_sw) IF(allocated(this%g_frac_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%g_frac_lw) IF(allocated(this%g_frac_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_spec_from_reordered_g_lw) IF(allocated(this%i_spec_from_reordered_g_lw)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%i_spec_from_reordered_g_sw) IF(allocated(this%i_spec_from_reordered_g_sw)) ASYNC(1)
+
+    ! NB: ckd_model_type not yet implemented
+
+    !$OMP TARGET ENTER DATA MAP(TO:this%cloud_optics)
+    !$ACC ENTER DATA COPYIN(this%cloud_optics) ASYNC(1)
+    call this%cloud_optics%create_device()
+
+    ! NB: general_cloud_optics_type not yet implemented
+
+    !$OMP TARGET ENTER DATA MAP(TO:this%aerosol_optics)
+    !$ACC ENTER DATA COPYIN(this%aerosol_optics) ASYNC(1)
+    call this%aerosol_optics%create_device()
+
+    !$OMP TARGET ENTER DATA MAP(TO:this%pdf_sampler)
+    !$ACC ENTER DATA COPYIN(this%pdf_sampler) ASYNC(1)
+    call this%pdf_sampler%create_device()
+    class default
+      call radiation_abort('*** Error: radiation_config:create_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host(this)
+
+    class(config_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (config_type)
+    !$OMP TARGET UPDATE FROM(this%g_frac_sw) IF(allocated(this%g_frac_sw))
+    !$OMP TARGET UPDATE FROM(this%g_frac_lw) IF(allocated(this%g_frac_lw))
+    !$OMP TARGET UPDATE FROM(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw))
+    !$OMP TARGET UPDATE FROM(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw))
+    !$OMP TARGET UPDATE FROM(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights))
+    !$OMP TARGET UPDATE FROM(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights))
+    !$OMP TARGET UPDATE FROM(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw))
+    !$OMP TARGET UPDATE FROM(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw))
+    !$OMP TARGET UPDATE FROM(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw))
+    !$OMP TARGET UPDATE FROM(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw))
+    !$OMP TARGET UPDATE FROM(this%i_spec_from_reordered_g_lw) IF(associated(this%i_spec_from_reordered_g_lw))
+    !$OMP TARGET UPDATE FROM(this%i_spec_from_reordered_g_sw) IF(associated(this%i_spec_from_reordered_g_sw))
+
+    !$ACC UPDATE HOST(this%g_frac_sw) IF(allocated(this%g_frac_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%g_frac_lw) IF(allocated(this%g_frac_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights)) ASYNC(1)
+    !$ACC UPDATE HOST(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_spec_from_reordered_g_lw) IF(allocated(this%i_spec_from_reordered_g_lw)) ASYNC(1)
+    !$ACC UPDATE HOST(this%i_spec_from_reordered_g_sw) IF(allocated(this%i_spec_from_reordered_g_sw)) ASYNC(1)
+
+    ! NB: ckd_model_type not yet implemented
+
+    !$OMP TARGET UPDATE FROM(this%cloud_optics)
+    !$ACC UPDATE HOST(this%cloud_optics) ASYNC(1)
+    call this%cloud_optics%update_host()
+
+    ! NB: general_cloud_optics_type not yet implemented
+
+    !$OMP TARGET UPDATE FROM(this%aerosol_optics)
+    !$ACC UPDATE HOST(this%aerosol_optics) ASYNC(1)
+    call this%aerosol_optics%update_host()
+
+    !$OMP TARGET UPDATE FROM(this%pdf_sampler)
+    !$ACC UPDATE HOST(this%pdf_sampler) ASYNC(1)
+    call this%pdf_sampler%update_host()
+    class default
+      call radiation_abort('*** Error: radiation_config:update_host: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device(this)
+
+    class(config_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (config_type)
+    !$OMP TARGET UPDATE TO(this%g_frac_sw) IF(allocated(this%g_frac_sw))
+    !$OMP TARGET UPDATE TO(this%g_frac_lw) IF(allocated(this%g_frac_lw))
+    !$OMP TARGET UPDATE TO(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw))
+    !$OMP TARGET UPDATE TO(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw))
+    !$OMP TARGET UPDATE TO(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights))
+    !$OMP TARGET UPDATE TO(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights))
+    !$OMP TARGET UPDATE TO(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw))
+    !$OMP TARGET UPDATE TO(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw))
+    !$OMP TARGET UPDATE TO(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw))
+    !$OMP TARGET UPDATE TO(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw))
+    !$OMP TARGET UPDATE TO(this%i_spec_from_reordered_g_lw) IF(associated(this%i_spec_from_reordered_g_lw))
+    !$OMP TARGET UPDATE TO(this%i_spec_from_reordered_g_sw) IF(associated(this%i_spec_from_reordered_g_sw))
+
+    !$ACC UPDATE DEVICE(this%g_frac_sw) IF(allocated(this%g_frac_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%g_frac_lw) IF(allocated(this%g_frac_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_spec_from_reordered_g_lw) IF(allocated(this%i_spec_from_reordered_g_lw)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%i_spec_from_reordered_g_sw) IF(allocated(this%i_spec_from_reordered_g_sw)) ASYNC(1)
+
+    ! NB: ckd_model_type not yet implemented
+
+    !$OMP TARGET UPDATE TO(this%cloud_optics)
+    !$ACC UPDATE DEVICE(this%cloud_optics) ASYNC(1)
+    call this%cloud_optics%update_device()
+
+    ! NB: general_cloud_optics_type not yet implemented
+
+    !$OMP TARGET UPDATE TO(this%aerosol_optics)
+    !$ACC UPDATE DEVICE(this%aerosol_optics) ASYNC(1)
+    call this%aerosol_optics%update_device()
+
+    !$OMP TARGET UPDATE TO(this%pdf_sampler)
+    !$ACC UPDATE DEVICE(this%pdf_sampler) ASYNC(1)
+    call this%pdf_sampler%update_device()
+    class default
+      call radiation_abort('*** Error: radiation_config:update_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device
+
+  !---------------------------------------------------------------------
+  ! deletes fields on device
+  subroutine delete_device(this)
+
+    class(config_type), intent(inout) :: this
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    select type (this)
+    type is (config_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%g_frac_sw) IF(allocated(this%g_frac_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%g_frac_lw) IF(allocated(this%g_frac_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_spec_from_reordered_g_lw) IF(associated(this%i_spec_from_reordered_g_lw))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%i_spec_from_reordered_g_sw) IF(associated(this%i_spec_from_reordered_g_sw))
+
+    !$ACC EXIT DATA DELETE(this%g_frac_sw) IF(allocated(this%g_frac_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%g_frac_lw) IF(allocated(this%g_frac_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_albedo_from_band_sw) IF(allocated(this%i_albedo_from_band_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_emiss_from_band_lw) IF(allocated(this%i_emiss_from_band_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%sw_albedo_weights) IF(allocated(this%sw_albedo_weights)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%lw_emiss_weights) IF(allocated(this%lw_emiss_weights)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_band_from_g_lw) IF(allocated(this%i_band_from_g_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_band_from_g_sw) IF(allocated(this%i_band_from_g_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_band_from_reordered_g_lw) IF(allocated(this%i_band_from_reordered_g_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_band_from_reordered_g_sw) IF(allocated(this%i_band_from_reordered_g_sw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_spec_from_reordered_g_lw) IF(allocated(this%i_spec_from_reordered_g_lw)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%i_spec_from_reordered_g_sw) IF(allocated(this%i_spec_from_reordered_g_sw)) ASYNC(1)
+
+    ! NB: ckd_model_type not yet implemented
+
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%cloud_optics)
+    !$ACC EXIT DATA DELETE(this%cloud_optics) ASYNC(1)
+    call this%cloud_optics%delete_device()
+
+    ! NB: general_cloud_optics_type not yet implemented
+
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%aerosol_optics)
+    !$ACC EXIT DATA DELETE(this%aerosol_optics) ASYNC(1)
+    call this%aerosol_optics%delete_device()
+
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%pdf_sampler)
+    !$ACC EXIT DATA DELETE(this%pdf_sampler) ASYNC(1)
+    call this%pdf_sampler%delete_device()
+#if defined(OMPGPU)
+    ! Matches the whole-struct map in create_device, and must come last.
+    ! Inside the select type for the same reason, so the two pair up.
+    !$OMP TARGET EXIT DATA MAP(DELETE:this)
+#endif
+    class default
+      call radiation_abort('*** Error: radiation_config:delete_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device
+
 
 end module radiation_config

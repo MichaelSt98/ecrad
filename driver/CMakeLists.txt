@@ -9,11 +9,20 @@
 
 include( ecrad_source_file_compile_flags )
 
+set( driver_read_input ecrad_driver_read_input.F90 )
+set( driver_standalone ecrad_driver.F90 )
+set( driver_ifs ecrad_ifs_driver.F90 )
+set( driver_blocked ecrad_ifs_driver_blocked.F90 )
+ecrad_select_gpu_sources( driver_read_input )
+ecrad_select_gpu_sources( driver_standalone )
+ecrad_select_gpu_sources( driver_ifs )
+ecrad_select_gpu_sources( driver_blocked )
+
 ecbuild_add_library(
     TARGET driver_lib.${PREC}
     TYPE OBJECT
     SOURCES
-        ecrad_driver_read_input.F90
+        ${driver_read_input}
         ecrad_driver_config.F90
         print_matrix_mod.F90
     PUBLIC_INCLUDES
@@ -33,7 +42,7 @@ set_target_properties( driver_lib.${PREC}
 ecbuild_add_executable(
     TARGET ecrad_${PREC}
     SOURCES
-        ecrad_driver.F90
+        ${driver_standalone}
     LIBS
         driver_lib.${PREC}
     LINKER_LANGUAGE Fortran
@@ -42,7 +51,7 @@ ecbuild_add_executable(
 ecbuild_add_executable(
     TARGET ecrad_ifs_${PREC}
     SOURCES
-        ecrad_ifs_driver.F90
+        ${driver_ifs}
     LIBS
         ifs.${PREC}
         driver_lib.${PREC}
@@ -52,7 +61,7 @@ ecbuild_add_executable(
 ecbuild_add_executable(
     TARGET ecrad_ifs_blocked_${PREC}
     SOURCES
-        ecrad_ifs_driver_blocked.F90
+        ${driver_blocked}
     LIBS
         ifs.${PREC}
         driver_lib.${PREC}
@@ -60,7 +69,7 @@ ecbuild_add_executable(
 )
 
 
-if( HAVE_FIELD_API )
+if( HAVE_FIELD_API AND NOT HAVE_GPU )
     ecbuild_add_executable(
         TARGET ecrad_ifs_field_api_${PREC}
         SOURCES

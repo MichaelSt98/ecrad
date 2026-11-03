@@ -1,0 +1,397 @@
+#ifdef RS6K
+@PROCESS HOT(NOVECTOR) NOSTRICT
+#endif
+SUBROUTINE SRTM_GAS_OPTICAL_DEPTH &
+ & ( KIDIA   , KFDIA   , KLEV    , PONEMINUS, &
+ &   PRMU0, &
+ &   KLAYTROP,&
+ &   PCOLCH4  , PCOLCO2 , PCOLH2O , PCOLMOL  , PCOLO2 , PCOLO3 ,&
+ &   PFORFAC , PFORFRAC , KINDFOR , PSELFFAC, PSELFFRAC, KINDSELF ,&
+ &   PFAC00  , PFAC01   , PFAC10  , PFAC11 ,&
+ &   KJP     , KJT      , KJT1 ,&
+ !-- output arrays
+ &   POD, PSSA, PINCSOL)
+
+
+!**** *SRTM_GAS_OPTICAL_DEPTH* - SPECTRAL LOOP TO COMPUTE THE SHORTWAVE RADIATION FLUXES.
+
+!     PURPOSE.
+!     --------
+
+!          COMPUTE THE GAS OPTICAL DEPTH AT EACH SHORTWAVE G POINT
+
+!**   INTERFACE.
+!     ----------
+
+!          *SRTM_GAS_OPTICAL_DEPTH* IS CALLED FROM THE NEW RADIATION SCHEME
+
+!        IMPLICIT ARGUMENTS :
+!        --------------------
+
+!     ==== INPUTS ===
+!     ==== OUTPUTS ===
+
+!     METHOD.
+!     -------
+
+!     EXTERNALS.
+!     ----------
+
+!     REFERENCE.
+!     ----------
+
+!        SEE RADIATION'S PART OF THE ECMWF RESEARCH DEPARTMENT
+!        DOCUMENTATION
+!     AUTHOR.
+!     -------
+!        ADAPTED FROM SRTM_SPCVRT_MCICA (BY JEAN-JACQUES MORCRETTE) BY
+!        ROBIN HOGAN
+!
+!     MODIFICATIONS.
+!     --------------
+!        ORIGINAL : 2015-07-16
+
+!     ------------------------------------------------------------------
+
+USE PARKIND1 , ONLY : JPIM, JPRB
+USE YOMHOOK  , ONLY : LHOOK, DR_HOOK, JPHOOK
+USE PARSRTM  , ONLY : JPB1, JPB2
+USE YOESRTM  , ONLY : JPGPT
+USE YOESRTWN , ONLY : NGC
+
+IMPLICIT NONE
+
+!     ------------------------------------------------------------------
+
+!*       0.1   ARGUMENTS
+!              ---------
+
+INTEGER(KIND=JPIM),INTENT(IN)    :: KIDIA, KFDIA
+INTEGER(KIND=JPIM),INTENT(IN)    :: KLEV
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PONEMINUS(KIDIA:KFDIA)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PRMU0(KIDIA:KFDIA)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KLAYTROP(KIDIA:KFDIA)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLCH4(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLCO2(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLH2O(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLMOL(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLO2(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PCOLO3(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFORFAC(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFORFRAC(KIDIA:KFDIA,KLEV)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KINDFOR(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PSELFFAC(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PSELFFRAC(KIDIA:KFDIA,KLEV)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KINDSELF(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFAC00(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFAC01(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFAC10(KIDIA:KFDIA,KLEV)
+REAL(KIND=JPRB)   ,INTENT(IN)    :: PFAC11(KIDIA:KFDIA,KLEV)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KJP(KIDIA:KFDIA,KLEV)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KJT(KIDIA:KFDIA,KLEV)
+INTEGER(KIND=JPIM),INTENT(IN)    :: KJT1(KIDIA:KFDIA,KLEV)
+
+REAL(KIND=JPRB)   ,INTENT(INOUT) :: POD(KIDIA:KFDIA,KLEV,JPGPT) ! Optical depth
+REAL(KIND=JPRB)   ,INTENT(INOUT) :: PSSA(KIDIA:KFDIA,KLEV,JPGPT) ! Single scattering albedo
+REAL(KIND=JPRB)   ,INTENT(INOUT) :: PINCSOL(KIDIA:KFDIA,JPGPT) ! Incoming solar flux
+
+
+!     ------------------------------------------------------------------
+
+INTEGER(KIND=JPIM) :: IB1, IB2, IBM, IGT, IW(KIDIA:KFDIA), JB, JG, JK, JL, ICOUNT
+INTEGER(KIND=JPIM) :: IWOFFSET
+INTEGER(KIND=JPIM) :: laytrop_min, laytrop_max, iplon
+
+!-- Output of SRTM_TAUMOLn routines
+REAL(KIND=JPRB) :: ZTAUG(KIDIA:KFDIA,KLEV,16) ! Absorption optical depth
+REAL(KIND=JPRB) :: ZTAUR(KIDIA:KFDIA,KLEV,16) ! Rayleigh optical depth
+REAL(KIND=JPRB) :: ZSFLXZEN(KIDIA:KFDIA,16) ! Incoming solar flux
+
+REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
+
+
+#include "srtm_taumol16_gpu.intfb.h"
+#include "srtm_taumol17_gpu.intfb.h"
+#include "srtm_taumol18_gpu.intfb.h"
+#include "srtm_taumol19_gpu.intfb.h"
+#include "srtm_taumol20_gpu.intfb.h"
+#include "srtm_taumol21_gpu.intfb.h"
+#include "srtm_taumol22_gpu.intfb.h"
+#include "srtm_taumol23_gpu.intfb.h"
+#include "srtm_taumol24_gpu.intfb.h"
+#include "srtm_taumol25_gpu.intfb.h"
+#include "srtm_taumol26_gpu.intfb.h"
+#include "srtm_taumol27_gpu.intfb.h"
+#include "srtm_taumol28_gpu.intfb.h"
+#include "srtm_taumol29_gpu.intfb.h"
+#include "rrtm_utils.intfb.h"
+
+!     ------------------------------------------------------------------
+
+IF (LHOOK) CALL DR_HOOK('SRTM_GAS_OPTICAL_DEPTH',0,ZHOOK_HANDLE)
+
+!$OMP TARGET ENTER DATA MAP(ALLOC:IW, ZTAUG, ZTAUR, ZSFLXZEN)
+#ifndef __NVCOMPILER
+!$OMP TARGET DATA MAP(PRESENT, ALLOC:PONEMINUS, PRMU0, KLAYTROP, PCOLCH4, PCOLCO2, PCOLH2O, &
+!$OMP             PCOLMOL, PCOLO2, PCOLO3, PFORFAC, PFORFRAC, KINDFOR, PSELFFAC, &
+!$OMP             PSELFFRAC, KINDSELF, PFAC00, PFAC01, PFAC10, PFAC11, KJP, &
+!$OMP             KJT, KJT1, POD, PSSA, PINCSOL)
+#endif
+
+!$ACC DATA CREATE(IW, ZTAUG, ZTAUR, ZSFLXZEN) &
+!$ACC     PRESENT(PONEMINUS, PRMU0, KLAYTROP, PCOLCH4, PCOLCO2, PCOLH2O, &
+!$ACC             PCOLMOL, PCOLO2, PCOLO3, PFORFAC, PFORFRAC, KINDFOR, PSELFFAC, &
+!$ACC             PSELFFRAC, KINDSELF, PFAC00, PFAC01, PFAC10, PFAC11, KJP, &
+!$ACC             KJT, KJT1, POD, PSSA, PINCSOL)
+
+IB1=JPB1
+IB2=JPB2
+
+ICOUNT=0
+
+!$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO REDUCTION(+:ICOUNT)
+!$ACC WAIT
+!$ACC PARALLEL LOOP GANG VECTOR DEFAULT(NONE) REDUCTION(+:ICOUNT)
+DO JL = KIDIA, KFDIA
+  IF (PRMU0(JL) > 0.0_JPRB) THEN
+    ICOUNT=ICOUNT+1
+    IW(JL)=0
+  ENDIF
+ENDDO
+!$ACC END PARALLEL LOOP
+!$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+CALL COMPUTE_LAYTROP_MIN_MAX(KIDIA, KFDIA, KLAYTROP, laytrop_min, laytrop_max)
+
+IF (ICOUNT/=0) THEN
+
+  IWOFFSET = 0
+
+  DO JB = IB1, IB2
+    IBM = JB-15
+    IGT = NGC(IBM)
+
+    !-- for each band, computes the gaseous and Rayleigh optical thickness
+    !  for all g-points within the band
+
+    IF (JB == 16) THEN
+      CALL SRTM_TAUMOL16 &
+      & ( KIDIA   , KFDIA    , KLEV    ,&
+      &   PFAC00  , PFAC01   , PFAC10   , PFAC11   ,&
+      &   KJP     , KJT      , KJT1     , PONEMINUS,&
+      &   PCOLH2O , PCOLCH4  , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC , PSELFFRAC, KINDSELF, PFORFAC  , PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG    , ZTAUR    , PRMU0,     &
+      &   laytrop_min, laytrop_max)
+
+    ELSEIF (JB == 17) THEN
+      CALL SRTM_TAUMOL17 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 18) THEN
+      CALL SRTM_TAUMOL18 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLCH4 , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 19) THEN
+      CALL SRTM_TAUMOL19 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 20) THEN
+      CALL SRTM_TAUMOL20 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     ,&
+      &   PCOLH2O , PCOLCH4 , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 21) THEN
+      CALL SRTM_TAUMOL21 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLCO2 , PCOLMOL  ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 22) THEN
+      CALL SRTM_TAUMOL22 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLMOL , PCOLO2   ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 23) THEN
+      CALL SRTM_TAUMOL23 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     ,&
+      &   PCOLH2O , PCOLMOL ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 24) THEN
+      CALL SRTM_TAUMOL24 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     , PONEMINUS ,&
+      &   PCOLH2O , PCOLMOL , PCOLO2   , PCOLO3 ,&
+      &   KLAYTROP, PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 25) THEN
+      !--- visible 16000-22650 cm-1   0.4415 - 0.6250 um
+      CALL SRTM_TAUMOL25 &
+      & ( KIDIA    , KFDIA   , KLEV     ,&
+      &   PFAC00   , PFAC01  , PFAC10 , PFAC11 ,&
+      &   KJP      , KJT     , KJT1   ,&
+      &   PCOLH2O  , PCOLMOL , PCOLO3 ,&
+      &   KLAYTROP ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR   , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 26) THEN
+      !--- UV-A 22650-29000 cm-1   0.3448 - 0.4415 um
+      CALL SRTM_TAUMOL26 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PCOLMOL ,KLAYTROP,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 27) THEN
+      !--- UV-B 29000-38000 cm-1   0.2632 - 0.3448 um
+      CALL SRTM_TAUMOL27 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP     , KJT     , KJT1     ,&
+      &   PCOLMOL , PCOLO3 ,&
+      &   KLAYTROP ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 28) THEN
+      !--- UV-C 38000-50000 cm-1   0.2000 - 0.2632 um
+      CALL SRTM_TAUMOL28 &
+      & ( KIDIA   , KFDIA   , KLEV    ,&
+      &   PFAC00  , PFAC01  , PFAC10 , PFAC11 ,&
+      &   KJP     , KJT     , KJT1   , PONEMINUS ,&
+      &   PCOLMOL , PCOLO2  , PCOLO3 ,&
+      &   KLAYTROP ,&
+      &   ZSFLXZEN, ZTAUG   , ZTAUR  , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ELSEIF (JB == 29) THEN
+      CALL SRTM_TAUMOL29 &
+      & ( KIDIA    , KFDIA   , KLEV     ,&
+      &   PFAC00   , PFAC01  , PFAC10   , PFAC11 ,&
+      &   KJP      , KJT     , KJT1     ,&
+      &   PCOLH2O  , PCOLCO2 , PCOLMOL  ,&
+      &   KLAYTROP , PSELFFAC, PSELFFRAC, KINDSELF  , PFORFAC, PFORFRAC, KINDFOR ,&
+      &   ZSFLXZEN , ZTAUG   , ZTAUR    , PRMU0,     &
+      &   laytrop_min=laytrop_min, laytrop_max=laytrop_max)
+
+    ENDIF
+
+#if defined(OMPGPU)
+    ! IW is zeroed for every sunlit column and then incremented once per
+    ! g-point under the same PRMU0 guard, so it holds the identical value in
+    ! every column it is ever read in and is just the cumulative g-point
+    ! offset. Tracking that offset in a host scalar removes the sequential
+    ! dependency that forced JG to stay on the host, which was costing one
+    ! kernel launch per g-point, 112 of them per call.
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+    DO JG=1,IGT
+      DO JL = KIDIA, KFDIA
+        IF (PRMU0(JL) > 0.0_JPRB) THEN
+          ! Incoming solar flux into plane perp to incoming radiation
+          PINCSOL(JL,IWOFFSET+JG) = ZSFLXZEN(JL,JG)
+        ENDIF
+      ENDDO
+    ENDDO
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
+    DO JG=1,IGT
+      DO JK=1,KLEV
+        DO JL = KIDIA, KFDIA
+          IF (PRMU0(JL) > 0.0_JPRB) THEN
+            POD (JL,JK,IWOFFSET+JG) = ZTAUR(JL,JK,JG) + ZTAUG(JL,JK,JG)
+            PSSA(JL,JK,IWOFFSET+JG) = ZTAUR(JL,JK,JG) / POD(JL,JK,IWOFFSET+JG)
+          ENDIF
+        ENDDO
+      ENDDO
+    ENDDO
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+    IWOFFSET = IWOFFSET + IGT
+#else
+    !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)
+    !$ACC LOOP SEQ
+    DO JG=1,IGT
+! Added for DWD (2020)
+!NEC$ ivdep
+      !$ACC LOOP GANG(STATIC:1) VECTOR
+      DO JL = KIDIA, KFDIA
+        IF (PRMU0(JL) > 0.0_JPRB) THEN
+          IW(JL)=IW(JL)+1
+          ! Incoming solar flux into plane perp to incoming radiation
+          PINCSOL(JL,IW(JL)) = ZSFLXZEN(JL,JG)
+        ENDIF
+      ENDDO
+
+      !$ACC LOOP SEQ
+      DO JK=1,KLEV
+        !$ACC LOOP GANG(STATIC:1) VECTOR PRIVATE(JL)
+        DO JL = KIDIA, KFDIA
+          IF (PRMU0(JL) > 0.0_JPRB) THEN
+            POD (JL,JK,IW(JL)) = ZTAUR(JL,JK,JG) + ZTAUG(JL,JK,JG)
+            PSSA(JL,JK,IW(JL)) = ZTAUR(JL,JK,JG) / POD(JL,JK,IW(JL))
+          ENDIF
+        ENDDO
+      ENDDO
+    ENDDO   !-- end loop on JG (g point)
+    !$ACC END PARALLEL
+#endif
+
+  ENDDO     !-- end loop on JB (band)
+
+ENDIF
+
+!$ACC WAIT
+!$ACC END DATA
+
+!$OMP TARGET EXIT DATA MAP(DELETE:laytrop_min,laytrop_max)
+!$OMP TARGET EXIT DATA MAP(DELETE: IW, ZTAUG, ZTAUR, ZSFLXZEN)
+#ifndef __NVCOMPILER
+!$OMP END TARGET DATA
+#endif
+
+!     ------------------------------------------------------------------
+
+IF (LHOOK) CALL DR_HOOK('SRTM_GAS_OPTICAL_DEPTH',1,ZHOOK_HANDLE)
+
+END SUBROUTINE SRTM_GAS_OPTICAL_DEPTH

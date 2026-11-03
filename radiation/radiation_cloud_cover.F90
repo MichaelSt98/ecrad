@@ -42,6 +42,7 @@ module radiation_cloud_cover
   ! Maximum cloud fraction distinguishable from 1
   real(jprb), parameter :: MaxCloudFrac = 1.0_jprb-epsilon(1.0_jprb)*10.0_jprb
 
+  !$omp declare target(beta2alpha)
 
 contains
 
@@ -60,6 +61,8 @@ contains
 
     ! Absolute difference in cloud fraction
     real(jprb)             :: frac_diff
+
+    !$ACC ROUTINE SEQ
 
     !$loki routine seq
 
@@ -232,7 +235,7 @@ contains
     implicit none
 
     ! Inputs
-    integer, intent(in)     :: istartcol, iendcol, ncol 
+    integer, intent(in)     :: istartcol, iendcol, ncol
     integer, intent(in)     :: nlev  ! number of model levels
 
     ! Cloud fraction on full levels

@@ -39,7 +39,7 @@ contains
     use parkind1,         only : jprb
     use yomhook,          only : lhook, dr_hook, jphook
     use radiation_io,     only : nulerr, radiation_abort
-    use radiation_config, only : config_type, ISolverMcICA, &
+    use radiation_config, only : config_type, ISolverMcICA, ISolverMcICAACC, &
          &   IGasModelMonochromatic, IGasModelIFSRRTMG, IGasModelECCKD
     use radiation_spectral_definition, only &
          &  : SolarReferenceTemperature, TerrestrialReferenceTemperature
@@ -55,7 +55,7 @@ contains
     use radiation_general_cloud_optics, only :  setup_general_cloud_optics
     use radiation_aerosol_optics, only :  setup_aerosol_optics
 
-    
+
     type(config_type), intent(inout) :: config
 
     real(jphook) :: hook_handle
@@ -87,7 +87,7 @@ contains
       call radiation_abort('Radiation configuration error')
     end if
 
-    
+
     ! Whether or not the "radiation" subroutine needs ssa_lw and g_lw
     ! arrays depends on whether longwave scattering by aerosols is to
     ! be included.  If not, one of the array dimensions will be set to
@@ -113,7 +113,7 @@ contains
     ! g factor arrays are allocated before the call to
     ! solver_lw as they will be needed.
     if (config%do_lw_cloud_scattering &
-         &  .and. config%i_solver_lw == ISolverMcICA) then
+         &  .and. (config%i_solver_lw == ISolverMcICA .or. config%i_solver_lw == ISolverMcICAACC) ) then
       config%n_g_lw_if_scattering = config%n_g_lw
     end if
 
@@ -139,14 +139,16 @@ contains
     if (config%use_aerosols) then
       if (config%i_gas_model_sw == IGasModelMonochromatic) then
 !        call setup_aerosol_optics_mono(config)
-      else 
+      else
         call setup_aerosol_optics(config)
       end if
     end if
 
     ! Load cloud water PDF look-up table for McICA
     if (         config%i_solver_sw == ISolverMcICA &
-         &  .or. config%i_solver_lw == ISolverMcICA) then
+         &  .or. config%i_solver_lw == ISolverMcICA &
+         &  .or. config%i_solver_sw == ISolverMcICAACC &
+         &  .or. config%i_solver_lw == ISolverMcICAACC ) then
       call config%pdf_sampler%setup(config%cloud_pdf_file_name, &
            &                        iverbose=config%iverbosesetup)
     end if
@@ -161,8 +163,8 @@ contains
   ! possibly scale factors) required by the specific gas absorption
   ! model.  This subroutine simply passes the gas object on to the
   ! module of the currently active gas model.
-  subroutine set_gas_units(config, gas)
-    
+  subroutine set_gas_units(config, gas, lacc)
+
     use radiation_config
     use radiation_gas,             only : gas_type
     use radiation_monochromatic,   only : set_gas_units_mono  => set_gas_units
@@ -171,6 +173,7 @@ contains
 
     type(config_type), intent(in)    :: config
     type(gas_type),    intent(inout) :: gas
+    logical, optional, intent(in) :: lacc
 
     if (config%i_gas_model_sw == IGasModelMonochromatic) then
       call set_gas_units_mono(gas)
@@ -178,7 +181,7 @@ contains
          &  .or. config%i_gas_model_lw == IGasModelIFSRRTMG) then
       ! Convert to mass-mixing ratio for RRTMG; note that ecCKD can
       ! work with this but performs an internal scaling
-      call set_gas_units_ifs(gas)
+      call set_gas_units_ifs(gas, lacc=lacc)
     else
       ! Use volume mixing ratio preferred by ecCKD
       call set_gas_units_ecckd(gas)
@@ -203,11 +206,11 @@ contains
     use parkind1,                 only : jprb
     use yomhook,                  only : lhook, dr_hook, jphook
 
-    use radiation_io,             only : nulout
+    use radiation_io,             only : nulout, nulerr, radiation_abort
     use radiation_config,         only : config_type, &
          &   IGasModelMonochromatic, IGasModelIFSRRTMG, IGasModelECCKD, &
          &   ISolverMcICA, ISolverSpartacus, ISolverHomogeneous, &
-         &   ISolverTripleclouds
+         &   ISolverTripleclouds, ISolverMcICAACC
     use radiation_single_level,   only : single_level_type
     use radiation_thermodynamics, only : thermodynamics_type
     use radiation_gas,            only : gas_type
@@ -220,13 +223,17 @@ contains
     use radiation_tripleclouds_lw,only : solver_tripleclouds_lw
     use radiation_mcica_sw,       only : solver_mcica_sw
     use radiation_mcica_lw,       only : solver_mcica_lw
+    use radiation_mcica_acc_sw,   only : solver_mcica_acc_sw
+    use radiation_mcica_acc_lw,   only : solver_mcica_acc_lw
+    use radiation_mcica_omp_sw,   only : solver_mcica_omp_sw
+    use radiation_mcica_omp_lw,   only : solver_mcica_omp_lw
     use radiation_cloudless_sw,   only : solver_cloudless_sw
     use radiation_cloudless_lw,   only : solver_cloudless_lw
     use radiation_homogeneous_sw, only : solver_homogeneous_sw
     use radiation_homogeneous_lw, only : solver_homogeneous_lw
     use radiation_save,           only : save_radiative_properties
 
-    ! Treatment of gas and hydrometeor optics 
+    ! Treatment of gas and hydrometeor optics
     use radiation_monochromatic,  only : &
          &   gas_optics_mono         => gas_optics, &
          &   cloud_optics_mono       => cloud_optics, &
@@ -236,6 +243,14 @@ contains
     use radiation_cloud_optics,   only : cloud_optics
     use radiation_general_cloud_optics, only : general_cloud_optics
     use radiation_aerosol_optics, only : add_aerosol_optics
+
+#ifdef HAVE_NVTX
+    use nvtx
+#endif
+#ifdef HAVE_ROCTX
+    use roctx_profiling, only: roctxstartrange, roctxendrange
+    use iso_c_binding, only: c_null_char
+#endif
 
     ! Inputs
     integer, intent(in) :: ncol               ! number of columns
@@ -303,10 +318,28 @@ contains
     character(len=100) :: rad_prop_file_name
     character(*), parameter :: rad_prop_base_file_name = "radiative_properties"
 
+    integer :: jcol, jlev, jband
+
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_interface:radiation',0,hook_handle)
 
+    !$ACC DATA CREATE(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
+    !$ACC             od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, &
+    !$ACC             planck_hl, lw_emission, lw_albedo, sw_albedo_direct, &
+    !$ACC             sw_albedo_diffuse, incoming_sw)
+
+    !$OMP TARGET ENTER DATA MAP(ALLOC: od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
+    !$OMP                       od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, &
+    !$OMP                       planck_hl, lw_emission, lw_albedo, sw_albedo_direct, &
+    !$OMP                       sw_albedo_diffuse, incoming_sw)
+    ! ifs/radiation_scheme.F90 fills pressure_hl inside a target region, so on
+    ! GPU builds the host copy is whatever the allocation happened to contain
+    ! and the ordering test below cannot be trusted without this update. Only
+    ! the first two levels are needed, and being the leading 2*ncol elements
+    ! of a column-major array they are contiguous.
+    !$ACC UPDATE HOST(thermodynamics%pressure_hl(:,1:2))
+    !$OMP TARGET UPDATE FROM(thermodynamics%pressure_hl(:,1:2))
     if (thermodynamics%pressure_hl(istartcol,2) &
          &  < thermodynamics%pressure_hl(istartcol,1)) then
       ! Input arrays are arranged in order of decreasing pressure /
@@ -319,12 +352,28 @@ contains
 
       ! Input arrays arranged in order of increasing pressure /
       ! decreasing height: progress normally
+#ifdef HAVE_NVTX
+      call nvtxStartRange("radiation::get_albedos")
+#endif
+#ifdef HAVE_ROCTX
+      call roctxStartRange("radiation::get_albedos"//c_null_char)
+#endif
 
       ! Extract surface albedos at each gridpoint
-      call single_level%get_albedos(istartcol, iendcol, config, &
+      call single_level%get_albedos(&
+           &                        istartcol, iendcol, config, &
            &                        sw_albedo_direct, sw_albedo_diffuse, &
            &                        lw_albedo)
 
+#ifdef HAVE_NVTX
+      !$ACC WAIT(1)
+      call nvtxEndRange
+      call nvtxStartRange("radiation::gas_optics")
+#endif
+#ifdef HAVE_ROCTX
+      call roctxEndRange
+      call roctxStartRange("radiation::gas_optics"//c_null_char)
+#endif
       ! Compute gas absorption optical depth in shortwave and
       ! longwave, shortwave single scattering albedo (i.e. fraction of
       ! extinction due to Rayleigh scattering), Planck functions and
@@ -353,11 +402,21 @@ contains
                &  incoming_sw=incoming_sw)
         end if
       end if
+#ifdef HAVE_NVTX
+      !$ACC WAIT(1)
+      call nvtxEndRange
+      call nvtxStartRange("radiation::cloud_optics")
+#endif
+#ifdef HAVE_ROCTX
+      call roctxEndRange
+      call roctxStartRange("radiation::cloud_optics"//c_null_char)
+#endif
 
       if (config%do_clouds) then
         ! Crop the cloud fraction to remove clouds that have too small
         ! a fraction or water content; after this, we can safely
         ! assume that a cloud is present if cloud%fraction > 0.0.
+        ! WARNING: not 100% tested on GPU as it has no effect on result
         call cloud%crop_cloud_fraction(istartcol, iendcol, &
              &            config%cloud_fraction_threshold, &
              &            config%cloud_mixing_ratio_threshold)
@@ -371,34 +430,66 @@ contains
                &  od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
         elseif (config%use_general_cloud_optics) then
           call general_cloud_optics(nlev, istartcol, iendcol, &
-               &  config, thermodynamics, cloud, & 
+               &  config, thermodynamics, cloud, &
                &  od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
                &  od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
         else
           call cloud_optics(nlev, istartcol, iendcol, &
-               &  config, thermodynamics, cloud, & 
+               &  config, thermodynamics, cloud, &
                &  od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
                &  od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
         end if
       end if ! do_clouds
 
+#ifdef HAVE_NVTX
+      !$ACC WAIT(1)
+      call nvtxEndRange
+      call nvtxStartRange("radiation::aerosol_optics")
+#endif
+#ifdef HAVE_ROCTX
+      call roctxEndRange
+      call roctxStartRange("radiation::aerosol_optics"//c_null_char)
+#endif
       if (config%use_aerosols) then
         if (config%i_gas_model_sw == IGasModelMonochromatic) then
 !          call add_aerosol_optics_mono(nlev,istartcol,iendcol, &
-!               &  config, thermodynamics, gas, aerosol, & 
+!               &  config, thermodynamics, gas, aerosol, &
 !               &  od_lw, ssa_lw, g_lw, od_sw, ssa_sw, g_sw)
         else
           call add_aerosol_optics(nlev,istartcol,iendcol, &
-               &  config, thermodynamics, gas, aerosol, & 
+               &  config, thermodynamics, gas, aerosol, &
                &  od_lw, ssa_lw, g_lw, od_sw, ssa_sw, g_sw)
         end if
       else
-        g_sw(:,:,istartcol:iendcol) = 0.0_jprb
-        if (config%do_lw_aerosol_scattering) then
-          ssa_lw(:,:,istartcol:iendcol) = 0.0_jprb
-          g_lw(:,:,istartcol:iendcol)   = 0.0_jprb
-        end if
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
+        !$ACC LOOP GANG VECTOR COLLAPSE(2)
+        do jcol = istartcol,iendcol
+          do jlev = 1,nlev
+            !$ACC LOOP SEQ
+            do jband = 1,config%n_g_sw
+              g_sw(jband,jlev,jcol) = 0.0_jprb
+            end do
+            if (config%do_lw_aerosol_scattering) then
+              !$ACC LOOP SEQ
+              do jband = 1,config%n_g_lw
+                ssa_lw(jband,jlev,jcol) = 0.0_jprb
+                g_lw(jband,jlev,jcol)   = 0.0_jprb
+              end do
+            end if
+          end do
+        end do
+        !$ACC END PARALLEL
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       end if
+
+#ifdef HAVE_NVTX
+      !$ACC WAIT(1)
+      call nvtxEndRange
+#endif
+#ifdef HAVE_ROCTX
+      call roctxEndRange
+#endif
 
       ! For diagnostic purposes, save these intermediate variables to
       ! a NetCDF file
@@ -409,7 +500,17 @@ contains
           write(rad_prop_file_name,'(a,a,i4.4,a,i4.4,a)') &
                &  rad_prop_base_file_name, '_', istartcol, '-',iendcol,'.nc'
         end if
-        call save_radiative_properties(trim(rad_prop_file_name), &
+#if defined(_OPENACC) || defined(OMPGPU)
+          !$OMP TARGET UPDATE FROM(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
+          !$OMP             planck_hl, lw_emission, lw_albedo, sw_albedo_direct, sw_albedo_diffuse, &
+          !$OMP             incoming_sw, od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
+          !$ACC UPDATE HOST(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
+          !$ACC             planck_hl, lw_emission, lw_albedo, sw_albedo_direct, sw_albedo_diffuse, &
+          !$ACC             incoming_sw, od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
+          call cloud%update_host()
+          call flux%update_host()
+#endif
+          call save_radiative_properties(trim(rad_prop_file_name), &
              &  nlev, istartcol, iendcol, &
              &  config, single_level, thermodynamics, cloud, &
              &  planck_hl, lw_emission, lw_albedo, &
@@ -424,28 +525,56 @@ contains
           write(nulout,'(a)') 'Computing longwave fluxes'
         end if
 
+        !$ACC WAIT
         if (config%i_solver_lw == ISolverMcICA) then
+#if defined(_OPENACC) || defined(OMPGPU)
+          !$OMP TARGET UPDATE FROM(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, planck_hl, &
+          !$OMP& lw_emission, lw_albedo)
+          !$ACC UPDATE HOST(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, planck_hl, lw_emission, lw_albedo)
+          !$ACC WAIT(1)
+          call cloud%update_host()
+          call flux%update_host()
+          !$ACC WAIT(1)
+#endif
           ! Compute fluxes using the McICA longwave solver
           call solver_mcica_lw(nlev,istartcol,iendcol, &
-               &  config, single_level, cloud, & 
+               &  config, single_level, cloud, &
                &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
                &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
+#if defined(_OPENACC) || defined(OMPGPU)
+          !$ACC WAIT(1)
+          call flux%update_device()
+          !$ACC WAIT(1)
+#endif
+        else if (config%i_solver_lw == ISolverMcICAACC) then
+          ! Compute fluxes using the McICA ACC longwave solver
+#if defined(OMPGPU)
+          call solver_mcica_omp_lw(nlev,istartcol,iendcol, &
+               &  config, single_level, cloud, &
+               &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
+               &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
+#else
+          call solver_mcica_acc_lw(nlev,istartcol,iendcol, &
+               &  config, single_level, cloud, &
+               &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
+               &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
+#endif
         else if (config%i_solver_lw == ISolverSPARTACUS) then
           ! Compute fluxes using the SPARTACUS longwave solver
           call solver_spartacus_lw(nlev,istartcol,iendcol, &
-               &  config, thermodynamics, cloud, & 
+               &  config, thermodynamics, cloud, &
                &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
                &  planck_hl, lw_emission, lw_albedo, flux)
         else if (config%i_solver_lw == ISolverTripleclouds) then
           ! Compute fluxes using the Tripleclouds longwave solver
           call solver_tripleclouds_lw(nlev,istartcol,iendcol, &
-               &  config, cloud, & 
+               &  config, cloud, &
                &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
                &  planck_hl, lw_emission, lw_albedo, flux)
         elseif (config%i_solver_lw == ISolverHomogeneous) then
           ! Compute fluxes using the homogeneous solver
           call solver_homogeneous_lw(nlev,istartcol,iendcol, &
-               &  config, cloud, & 
+               &  config, cloud, &
                &  od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, &
                &  g_lw_cloud, planck_hl, lw_emission, lw_albedo, flux)
         else
@@ -461,31 +590,61 @@ contains
           write(nulout,'(a)') 'Computing shortwave fluxes'
         end if
 
+        !$ACC WAIT
         if (config%i_solver_sw == ISolverMcICA) then
+#if defined(_OPENACC) || defined(OMPGPU)
+          !$OMP TARGET UPDATE FROM(od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, &
+          !$OMP& sw_albedo_direct, sw_albedo_diffuse, incoming_sw)
+          !$ACC UPDATE HOST(od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, incoming_sw)
+          !$ACC WAIT(1)
+          call cloud%update_host()
+          call flux%update_host()
+          !$ACC WAIT(1)
+#endif
           ! Compute fluxes using the McICA shortwave solver
           call solver_mcica_sw(nlev,istartcol,iendcol, &
-               &  config, single_level, cloud, & 
+               &  config, single_level, cloud, &
                &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
                &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
                &  incoming_sw, flux)
+#if defined(_OPENACC) || defined(OMPGPU)
+          !$ACC WAIT(1)
+          call flux%update_device()
+          !$ACC WAIT(1)
+#endif
+        else if (config%i_solver_sw == ISolverMcICAACC) then
+          ! Compute fluxes using the McICA ACC shortwave solver
+#if defined(OMPGPU)
+          call solver_mcica_omp_sw(nlev,istartcol,iendcol, &
+               &  config, single_level, cloud, &
+               &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
+               &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
+               &  incoming_sw, flux)
+#else
+          call solver_mcica_acc_sw(nlev,istartcol,iendcol, &
+               &  config, single_level, cloud, &
+               &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
+               &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
+               &  incoming_sw, flux)
+#endif
         else if (config%i_solver_sw == ISolverSPARTACUS) then
           ! Compute fluxes using the SPARTACUS shortwave solver
           call solver_spartacus_sw(nlev,istartcol,iendcol, &
-               &  config, single_level, thermodynamics, cloud, & 
+               &  config, single_level, thermodynamics, cloud, &
                &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
                &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
                &  incoming_sw, flux)
         else if (config%i_solver_sw == ISolverTripleclouds) then
           ! Compute fluxes using the Tripleclouds shortwave solver
           call solver_tripleclouds_sw(nlev,istartcol,iendcol, &
-               &  config, single_level, cloud, & 
+               &  config, single_level, cloud, &
                &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
                &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
                &  incoming_sw, flux)
         elseif (config%i_solver_sw == ISolverHomogeneous) then
           ! Compute fluxes using the homogeneous solver
           call solver_homogeneous_sw(nlev,istartcol,iendcol, &
-               &  config, single_level, cloud, & 
+               &  config, single_level, cloud, &
                &  od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, &
                &  g_sw_cloud, sw_albedo_direct, sw_albedo_diffuse, &
                &  incoming_sw, flux)
@@ -504,7 +663,14 @@ contains
       call flux%calc_toa_spectral    (config, istartcol, iendcol)
 
     end if
-    
+
+    !$ACC WAIT
+    !$ACC END DATA
+
+    !$OMP TARGET EXIT DATA MAP(DELETE:od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
+    !$OMP                      od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud, &
+    !$OMP                      planck_hl, lw_emission, lw_albedo, sw_albedo_direct, &
+    !$OMP                      sw_albedo_diffuse, incoming_sw)
     if (lhook) call dr_hook('radiation_interface:radiation',1,hook_handle)
 
   end subroutine radiation
@@ -518,10 +684,10 @@ contains
   ! module to avoid circular dependencies.
   subroutine radiation_reverse(ncol, nlev, istartcol, iendcol, config, &
        &  single_level, thermodynamics, gas, cloud, aerosol, flux)
- 
+
     use parkind1, only : jprb
 
-    use radiation_io,             only : nulout
+    use radiation_io,             only : nulout, nulerr, radiation_abort
     use radiation_config,         only : config_type
     use radiation_single_level,   only : single_level_type
     use radiation_thermodynamics, only : thermodynamics_type
@@ -556,6 +722,11 @@ contains
     if (config%iverbose >= 2) then
       write(nulout,'(a)') 'Reversing arrays to be in order of increasing pressure'
     end if
+
+#if defined(_OPENACC) || defined(OMPGPU)
+    write(nulerr,'(a)') '*** Error: radiation_interface:radiation_reverse not ported to GPU'
+    call radiation_abort()
+#endif
 
     ! Allocate reversed arrays
     call thermodynamics_rev%allocate(ncol, nlev)
@@ -595,7 +766,7 @@ contains
         cloud_rev%fractional_std(istartcol:iendcol,:) &
              &  = cloud%fractional_std(istartcol:iendcol,nlev:1:-1)
       else
-        cloud_rev%fractional_std(istartcol:iendcol,:) = 0.0_jprb       
+        cloud_rev%fractional_std(istartcol:iendcol,:) = 0.0_jprb
       end if
       if (associated(cloud%inv_cloud_effective_size)) then
         cloud_rev%inv_cloud_effective_size(istartcol:iendcol,:) &

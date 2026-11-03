@@ -19,6 +19,9 @@ REAL(KIND=JPRB) :: SFLUXREF(JPG), RAYL(JPG)
 
 REAL(KIND=JPRB) :: SFLUXREFC(NG26), RAYLC(NG26)
 
+!$ACC DECLARE CREATE(SFLUXREFC, RAYLC)
+!$OMP DECLARE TARGET(SFLUXREFC, RAYLC)
+
 !     -----------------------------------------------------------------
 !        * E.C.M.W.F. PHYSICS PACKAGE ** RRTM SW RADIATION **
 

@@ -4,10 +4,11 @@
 *_out.nc
 config_*.nam
 *_sza.nc
-mod
+/mod
 /practical/data
 /practical/ecrad
-/build*
+/build
+*.mod
 /bin/ecrad
 /bin/ecrad_ifs
 /bin/ecrad_ifs_blocked

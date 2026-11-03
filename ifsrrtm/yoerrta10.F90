@@ -26,6 +26,9 @@ REAL(KIND=JPRB) :: FORREF(NG10,4)
 
 EQUIVALENCE (KA(1,1,1),ABSA(1,1)),(KB(1,1,13),ABSB(1,1))
 
+!$ACC DECLARE CREATE(FRACREFA, FRACREFB, KA, ABSA, KB, ABSB, SELFREF, FORREF)
+!$OMP DECLARE TARGET(FRACREFA, FRACREFB, SELFREF, FORREF)
+
 !     -----------------------------------------------------------------
 !        * E.C.M.W.F. PHYSICS PACKAGE *
 

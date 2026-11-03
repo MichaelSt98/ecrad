@@ -20,16 +20,19 @@
 module radiation_thermodynamics
 
   use parkind1, only : jprb
+  use radiation_io, only : radiation_abort
 
   implicit none
   public
 
   !---------------------------------------------------------------------
-  ! Derived type for storing pressure and temperature at half levels
+  ! Derived type for storing pressure and temperature at half and full levels
   type thermodynamics_type
      real(jprb), pointer, dimension(:,:) :: &
-          &  pressure_hl=>null(), &   ! (ncol,nlev+1) pressure (Pa)
-          &  temperature_hl=>null()   ! (ncol,nlev+1) temperature (K)
+          &  pressure_hl=>null(),    & ! (ncol,nlev+1) pressure (Pa)
+          &  temperature_hl=>null(), & ! (ncol,nlev+1) temperature (K)
+          &  pressure_fl=>null(),    & ! (ncol,nlev) pressure (Pa)
+          &  temperature_fl=>null()    ! (ncol,nlev) temperature (K)
 
      ! The following is a function of pressure and temperature: you
      ! can calculate it according to your favourite formula, or the
@@ -38,14 +41,27 @@ module radiation_thermodynamics
      real(jprb), pointer, dimension(:,:) :: &
           &  h2o_sat_liq=>null() ! (ncol,nlev) specific humidity at liquid
                          ! saturation (kg/kg)
+
+     ! Using the interpolation method for temperature and pressure from half levels
+     ! to full levels that is used in the subroutine gas_optics in radiation_ifs_rrtm
+     ! can result in values for ind1 that exceed the bounds of absa within
+     ! srtm_taumol16 for ecRad inside ICON. This can be avoided by directly
+     ! passing pressure_fl and temperature_fl from ICON to ecRad. With
+     ! rrtm_pass_temppres_fl = .TRUE., the fields pressure_fl and temperature_fl
+     ! are allocated and used within gas_optics in radiation_ifs_rrtm.
+     logical :: &
+          &  rrtm_pass_temppres_fl
    contains
      procedure :: allocate   => allocate_thermodynamics_arrays
      procedure :: deallocate => deallocate_thermodynamics_arrays
-     procedure :: calc_saturation_wrt_liquid
      procedure :: get_layer_mass
      procedure :: get_layer_mass_column
      procedure :: out_of_physical_bounds
-
+     procedure :: calc_saturation_wrt_liquid
+     procedure :: create_device
+     procedure :: update_host
+     procedure :: update_device
+     procedure :: delete_device
   end type thermodynamics_type
 
 contains
@@ -54,7 +70,7 @@ contains
   !---------------------------------------------------------------------
   ! Allocate variables with specified dimensions
   subroutine allocate_thermodynamics_arrays(this, ncol, nlev, &
-       &                                    use_h2o_sat)
+       &                                    use_h2o_sat, rrtm_pass_temppres_fl)
 
     use yomhook,  only : lhook, dr_hook, jphook
 
@@ -62,6 +78,8 @@ contains
     integer, intent(in)           :: ncol  ! Number of columns
     integer, intent(in)           :: nlev  ! Number of levels
     logical, intent(in), optional :: use_h2o_sat ! Allocate h2o_sat_liq?
+    logical, intent(in), optional :: rrtm_pass_temppres_fl ! Directly pass temperature
+                                                           ! and pressure on full levels
 
     logical :: use_h2o_sat_local
 
@@ -75,6 +93,16 @@ contains
     use_h2o_sat_local = .false.
     if (present(use_h2o_sat)) then
       use_h2o_sat_local = use_h2o_sat
+    end if
+
+    this%rrtm_pass_temppres_fl = .false.
+    if (present(rrtm_pass_temppres_fl)) then
+      this%rrtm_pass_temppres_fl = rrtm_pass_temppres_fl
+    end if
+
+    if (this%rrtm_pass_temppres_fl) then
+      allocate(this%pressure_fl(ncol,nlev))
+      allocate(this%temperature_fl(ncol,nlev))
     end if
 
     if (use_h2o_sat_local) then
@@ -106,6 +134,14 @@ contains
       deallocate(this%temperature_hl)
       this%temperature_hl => null()
     end if
+    if (associated(this%pressure_fl)) then
+      deallocate(this%pressure_fl)
+      nullify(this%pressure_fl)
+    end if
+    if (associated(this%temperature_fl)) then
+      deallocate(this%temperature_fl)
+      nullify(this%temperature_fl)
+    end if
     if (associated(this%h2o_sat_liq)) then
       deallocate(this%h2o_sat_liq)
       this%h2o_sat_liq => null()
@@ -118,12 +154,15 @@ contains
 
   !---------------------------------------------------------------------
   ! Calculate approximate saturation with respect to liquid
-  subroutine calc_saturation_wrt_liquid(this,istartcol,iendcol)
+  subroutine calc_saturation_wrt_liquid(this,istartcol,iendcol, lacc)
 
     use yomhook,  only : lhook, dr_hook, jphook
 
-    class(thermodynamics_type), intent(inout) :: this
+    class(thermodynamics_type), intent(inout)  :: this
     integer, intent(in)                       :: istartcol, iendcol
+    logical, optional, intent(in)             :: lacc
+
+    logical :: llacc
 
     ! Pressure and temperature at full levels
     real(jprb) :: pressure, temperature
@@ -136,15 +175,29 @@ contains
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (thermodynamics_type)
     if (lhook) call dr_hook('radiation_thermodynamics:calc_saturation_wrt_liquid',0,hook_handle)
+
+    if (present(lacc)) then
+        llacc = lacc
+    else
+        llacc = .false.
+    endif
 
     ncol = size(this%pressure_hl,1)
     nlev = size(this%pressure_hl,2) - 1
 
     if (.not. associated(this%h2o_sat_liq)) then
+      ! only required in non blocked mode
       allocate(this%h2o_sat_liq(ncol,nlev))
-    end if
+    endif
 
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(pressure, temperature, e_sat) IF(llacc)
+#endif
+    !$ACC PARALLEL DEFAULT(NONE) PRESENT(this) ASYNC(1) IF(llacc)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(pressure, temperature, e_sat)
     do jlev = 1,nlev
        do jcol = istartcol,iendcol
           pressure = 0.5 * (this%pressure_hl(jcol,jlev)+this%pressure_hl(jcol,jlev+1))
@@ -155,8 +208,15 @@ contains
           this%h2o_sat_liq(jcol,jlev) = min(1.0_jprb, 0.622_jprb * e_sat / pressure)
        end do
     end do
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
     if (lhook) call dr_hook('radiation_thermodynamics:calc_saturation_wrt_liquid',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:calc_saturation_wrt_liquid: unexpected dynamic type')
+    end select
 
   end subroutine calc_saturation_wrt_liquid
 
@@ -164,31 +224,63 @@ contains
   !---------------------------------------------------------------------
   ! Calculate the dry mass of each layer, neglecting humidity effects.
   ! The first version is for all columns.
-  subroutine get_layer_mass(this,istartcol,iendcol,layer_mass)
+  subroutine get_layer_mass(this,istartcol,iendcol,layer_mass,lacc)
 
     use yomhook,              only : lhook, dr_hook, jphook
     use radiation_constants,  only : AccelDueToGravity
 
-    class(thermodynamics_type), intent(in)  :: this
+    class(thermodynamics_type),  intent(in)  :: this
     integer,                    intent(in)  :: istartcol, iendcol
-    real(jprb),                 intent(out) :: layer_mass(istartcol:iendcol,ubound(this%pressure_hl,2))
+    ! pressure_hl is (ncol,nlev+1), so ubound(...,2) here would declare one
+    ! level more than the caller's actual argument, which has nlev. Only
+    ! 1:nlev is ever written, so this was harmless on the host, but OpenMP
+    ! implicitly maps the dummy's declared extent and so mapped a level past
+    ! the end of the caller's array. The resulting entry outlived the caller's
+    ! matching exit data and later overlapped a freshly allocated h2o_sat_liq.
+    real(jprb),                 intent(out) :: layer_mass(istartcol:iendcol,ubound(this%pressure_hl,2)-1)
+    logical, optional,          intent(in)  :: lacc
 
-    integer    :: nlev
+    integer    :: nlev, jl, jk
     real(jprb) :: inv_g
+    logical    :: llacc
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (thermodynamics_type)
     if (lhook) call dr_hook('radiation_thermodynamics:get_layer_mass',0,hook_handle)
+
+    if (present(lacc)) then
+        llacc = lacc
+    else
+        llacc = .false.
+    endif
 
     nlev  = ubound(this%pressure_hl,2) - 1
     inv_g = 1.0_jprb / AccelDueToGravity
 
-    layer_mass(istartcol:iendcol,1:nlev) &
-         &  = ( this%pressure_hl(istartcol:iendcol,2:nlev+1) &
-         &     -this%pressure_hl(istartcol:iendcol,1:nlev  )  ) &
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    DO jl=istartcol, iendcol
+      DO jk=1, nlev
+        layer_mass(jl,jk) &
+            &  = ( this%pressure_hl(jl,jk+1) &
+            &     -this%pressure_hl(jl,jk  )  ) &
          &  * inv_g
+      END DO
+    END DO
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
     if (lhook) call dr_hook('radiation_thermodynamics:get_layer_mass',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:get_layer_mass: unexpected dynamic type')
+    end select
 
   end subroutine get_layer_mass
 
@@ -329,5 +421,109 @@ contains
     if (lhook) call dr_hook('radiation_thermodynamics:out_of_physical_bounds',1,hook_handle)
 
   end function out_of_physical_bounds
+
+  !---------------------------------------------------------------------
+  ! Creates fields on device
+  subroutine create_device(this)
+
+    class(thermodynamics_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (thermodynamics_type)
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%pressure_hl) IF(allocated(this%pressure_hl))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%temperature_hl) IF(allocated(this%temperature_hl))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%pressure_fl) IF(allocated(this%pressure_fl))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%temperature_fl) IF(allocated(this%temperature_fl))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq))
+
+    !$ACC ENTER DATA CREATE(this%pressure_hl) IF(allocated(this%pressure_hl)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%temperature_hl) IF(allocated(this%temperature_hl)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%pressure_fl) IF(allocated(this%pressure_fl)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%temperature_fl) IF(allocated(this%temperature_fl)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:create_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host(this)
+
+    class(thermodynamics_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (thermodynamics_type)
+    !$OMP TARGET UPDATE FROM(this%pressure_hl) IF(allocated(this%pressure_hl))
+    !$OMP TARGET UPDATE FROM(this%temperature_hl) IF(allocated(this%temperature_hl))
+    !$OMP TARGET UPDATE FROM(this%pressure_fl) IF(allocated(this%pressure_fl))
+    !$OMP TARGET UPDATE FROM(this%temperature_fl) IF(allocated(this%temperature_fl))
+    !$OMP TARGET UPDATE FROM(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq))
+
+    !$ACC UPDATE HOST(this%pressure_hl) IF(allocated(this%pressure_hl)) ASYNC(1)
+    !$ACC UPDATE HOST(this%temperature_hl) IF(allocated(this%temperature_hl)) ASYNC(1)
+    !$ACC UPDATE HOST(this%pressure_fl) IF(allocated(this%pressure_fl)) ASYNC(1)
+    !$ACC UPDATE HOST(this%temperature_fl) IF(allocated(this%temperature_fl)) ASYNC(1)
+    !$ACC UPDATE HOST(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:update_host: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device(this)
+
+    class(thermodynamics_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (thermodynamics_type)
+    !$OMP TARGET UPDATE TO(this%pressure_hl) IF(allocated(this%pressure_hl))
+    !$OMP TARGET UPDATE TO(this%temperature_hl) IF(allocated(this%temperature_hl))
+    !$OMP TARGET UPDATE TO(this%pressure_fl) IF(allocated(this%pressure_fl))
+    !$OMP TARGET UPDATE TO(this%temperature_fl) IF(allocated(this%temperature_fl))
+    !$OMP TARGET UPDATE TO(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq))
+
+    !$ACC UPDATE DEVICE(this%pressure_hl) IF(allocated(this%pressure_hl)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%temperature_hl) IF(allocated(this%temperature_hl)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%pressure_fl) IF(allocated(this%pressure_fl)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%temperature_fl) IF(allocated(this%temperature_fl)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:update_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device
+
+  !---------------------------------------------------------------------
+  ! Deletes fields on device
+  subroutine delete_device(this)
+
+    class(thermodynamics_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (thermodynamics_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%pressure_hl) IF(allocated(this%pressure_hl))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%temperature_hl) IF(allocated(this%temperature_hl))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%pressure_fl) IF(allocated(this%pressure_fl))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%temperature_fl) IF(allocated(this%temperature_fl))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq))
+
+    !$ACC EXIT DATA DELETE(this%pressure_hl) IF(allocated(this%pressure_hl)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%temperature_hl) IF(allocated(this%temperature_hl)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%pressure_fl) IF(allocated(this%pressure_fl)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%temperature_fl) IF(allocated(this%temperature_fl)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%h2o_sat_liq) IF(allocated(this%h2o_sat_liq)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_thermodynamics:delete_device: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device
 
 end module radiation_thermodynamics

@@ -31,6 +31,10 @@ REAL(KIND=JPRB) :: SFLUXREFC(NG17,5)
 
 !EQUIVALENCE (KA(1,1,1,1),ABSA(1,1)), (KB(1,1,13,1),ABSB(1,1))
 EQUIVALENCE (KAC(1,1,1,1),ABSA(1,1)), (KBC(1,1,1,13),ABSB(1,1))
+
+!$ACC DECLARE CREATE(KAC, ABSA, KBC, ABSB, SELFREFC, FORREFC, SFLUXREFC)
+!$OMP DECLARE TARGET(SELFREFC, FORREFC, SFLUXREFC)
+
 !     -----------------------------------------------------------------
 !        * E.C.M.W.F. PHYSICS PACKAGE ** RRTM SW RADIATION **
 
@@ -55,4 +59,3 @@ EQUIVALENCE (KAC(1,1,1,1),ABSA(1,1)), (KBC(1,1,1,13),ABSB(1,1))
 !SFLUXREFC: REAL     Reduced g-point array for SFLUXREF
 !     -----------------------------------------------------------------
 END MODULE YOESRTA17
-

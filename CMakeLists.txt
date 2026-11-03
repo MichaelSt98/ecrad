@@ -7,7 +7,7 @@
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
 
-cmake_minimum_required( VERSION 3.20 FATAL_ERROR )
+cmake_minimum_required( VERSION 3.24 FATAL_ERROR )
 
 # ecrad uses ecbuild (https://github.com/ecmwf/ecbuild) to enhance the CMake build system.
 # In an ifs-bundle build, ecbuild is already available as a shared dependency for multiple
@@ -38,6 +38,25 @@ ecbuild_enable_fortran( REQUIRED )
 set( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 
 set( ECRAD_COMPILE_DEFINITIONS "" )
+
+# Host OpenMP and the accelerator backend are separate choices. AUTO retains
+# the legacy ENABLE_GPU/ENABLE_ACC/ENABLE_OMP switches; a fresh build is CPU.
+set( ECRAD_GPU_BACKEND AUTO CACHE STRING "Accelerator backend: AUTO, CPU, ACC or OMP" )
+set_property( CACHE ECRAD_GPU_BACKEND PROPERTY STRINGS AUTO CPU ACC OMP )
+if( NOT ECRAD_GPU_BACKEND MATCHES "^(AUTO|CPU|ACC|OMP)$" )
+    message( FATAL_ERROR "ECRAD_GPU_BACKEND must be AUTO, CPU, ACC or OMP" )
+endif()
+if( ECRAD_GPU_BACKEND STREQUAL "CPU" )
+    set( ECRAD_ENABLE_GPU OFF )
+    set( ECRAD_ENABLE_ACC OFF )
+elseif( ECRAD_GPU_BACKEND STREQUAL "ACC" )
+    set( ECRAD_ENABLE_GPU ON )
+    set( ECRAD_ENABLE_ACC ON )
+elseif( ECRAD_GPU_BACKEND STREQUAL "OMP" )
+    set( ECRAD_ENABLE_GPU ON )
+    set( ECRAD_ENABLE_ACC OFF )
+    set( ECRAD_ENABLE_OMP ON )
+endif()
 
 # Dependencies
 find_package( NetCDF COMPONENTS Fortran REQUIRED )
@@ -72,9 +91,100 @@ ecbuild_add_option(
 ecbuild_add_option(
     FEATURE OMP
     DEFAULT ON
-    DESCRIPTION "Use OpenMP for shared memory parallelisation in the driver programs"
+    DESCRIPTION "Use OpenMP for device offload or for shared memory parallelisation"
     REQUIRED_PACKAGES "OpenMP COMPONENTS Fortran"
 )
+
+if( ${CMAKE_VERSION} VERSION_LESS "3.25" )
+  if ( ECRAD_ENABLE_ACC OR (NOT DEFINED ECRAD_ENABLE_ACC AND ENABLE_ACC) )
+    # See https://gitlab.kitware.com/cmake/cmake/-/issues/23691, fixed in CMake 3.25
+    # (TL;DR: FindOpenACC sets OpenACC_<LANG>_FOUND correctly but does not set
+    #  OpenACC_FOUND unless all three C, CXX, and Fortran have been found - even if
+    #  only one language has been requested via COMPONENTS)
+    find_package( OpenACC COMPONENTS Fortran )
+    if( OpenACC_Fortran_FOUND )
+      set( OpenACC_FOUND ON )
+    endif()
+  endif()
+endif()
+ecbuild_add_option(
+    FEATURE ACC
+    DEFAULT OFF
+    DESCRIPTION "Use OpenACC to offload computations to GPU"
+    REQUIRED_PACKAGES "OpenACC COMPONENTS Fortran"
+    CONDITION CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC"
+)
+
+if( CMAKE_VERSION VERSION_LESS 3.25 )
+    set( NVTX_TARGET CUDA::nvToolsExt )
+else()
+    set( NVTX_TARGET CUDA::nvtx3 )
+endif()
+ecbuild_add_option(
+    FEATURE NVTX
+    DEFAULT OFF
+    DESCRIPTION "Enable NVTX markers in code"
+    REQUIRED_PACKAGES "CUDAToolkit COMPONENTS ${NVTX_TARGET}"
+    CONDITION HAVE_ACC
+)
+if( HAVE_NVTX )
+    list( APPEND NVTX_TARGET nvhpcwrapnvtx )
+    list( APPEND ECRAD_COMPILE_DEFINITIONS HAVE_NVTX )
+endif()
+
+if( HAVE_ACC )
+    set( GPU_DEFAULT ON )
+else()
+    set( GPU_DEFAULT OFF )
+endif()
+
+ecbuild_add_option( FEATURE GPU
+                    DEFAULT ${GPU_DEFAULT}
+                    DESCRIPTION "Compile GPU version of ECRad (Requires OpenACC or sufficient OpenMP offloading support)"
+                    CONDITION (HAVE_ACC OR HAVE_OMP) )
+
+if( HAVE_GPU )
+  if( HAVE_ACC )
+    set( GPU_OFFLOAD "ACC" )
+  elseif( HAVE_OMP )
+    set( GPU_OFFLOAD "OMP" )
+  else()
+    ecbuild_error("Could not enable GPU as OMP or ACC were not enabled")
+  endif()
+endif()
+
+if( HAVE_GPU )
+    list( APPEND ECRAD_COMPILE_DEFINITIONS ${GPU_OFFLOAD}GPU )
+endif()
+
+# Keep main's CPU routines, including SIMD-oriented RRTMG layouts, while
+# selecting accelerator implementations with their specialised work layouts.
+function( ecrad_select_gpu_sources source_list )
+    if( HAVE_GPU )
+        set( selected_sources "" )
+        foreach( source IN LISTS ${source_list} )
+            string( REGEX REPLACE "\\.F90$" "_gpu.F90" gpu_source "${source}" )
+            if( EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${gpu_source}" )
+                list( APPEND selected_sources "${gpu_source}" )
+            else()
+                list( APPEND selected_sources "${source}" )
+            endif()
+        endforeach()
+        set( ${source_list} "${selected_sources}" PARENT_SCOPE )
+    endif()
+endfunction()
+
+ecbuild_add_option(
+  FEATURE ROCTX
+  DEFAULT OFF
+  DESCRIPTION "Enable Roctx markers in code"
+  CONDITION (HAVE_GPU AND HAVE_OMP)
+  REQUIRED_PACKAGES ROCTX
+)
+
+if( HAVE_ROCTX )
+  list( APPEND ECRAD_COMPILE_DEFINITIONS HAVE_ROCTX )
+endif()
 
 set( _PRECISIONS "" )
 ecbuild_add_option(
@@ -148,6 +258,14 @@ foreach( PREC IN LISTS _PRECISIONS )
             $<${HAVE_FIAT}:fiat parkind_${PREC}>
             $<$<NOT:${HAVE_FIAT}>:drhook_dummy>
     )
+
+    if( HAVE_GPU AND GPU_OFFLOAD STREQUAL "OMP" )
+        target_link_libraries( ecrad_base.${PREC} INTERFACE OpenMP::OpenMP_Fortran )
+        if( CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC" )
+            target_compile_options( ecrad_base.${PREC} INTERFACE "-mp=gpu" )
+            target_link_options( ecrad_base.${PREC} INTERFACE "-mp=gpu" )
+        endif()
+    endif()
 
     add_subdirectory(ifsaux ifsaux.${PREC})
     add_subdirectory(utilities utilities.${PREC})

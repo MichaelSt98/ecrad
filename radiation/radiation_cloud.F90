@@ -20,6 +20,7 @@
 module radiation_cloud
 
   use parkind1, only : jprb
+  use radiation_io, only : radiation_abort
 
   implicit none
   public
@@ -41,9 +42,21 @@ module radiation_cloud
     ! For backwards compatibility, we also allow for the two
     ! traditional cloud types, liquid cloud droplets and ice cloud
     ! particles, dimensioned (ncol,nlev)
+    ! These are always associated with a whole (:,:,jtype) slice of the arrays
+    ! above, so they are contiguous. Saying so lets them be passed to
+    ! explicit-shape dummies without the compiler inserting a host copy, which
+    ! on GPU builds would detach them from their device allocation.
+    ! NVHPC 24.5 and 24.11 miscompile the argument passing of these components
+    ! when CONTIGUOUS is present, giving wrong cloudy-sky fluxes in the
+    ! unblocked IFS driver, so that compiler keeps the plain pointer
+    ! declaration.
+#if defined(__NVCOMPILER)
     real(jprb), pointer, dimension(:,:) :: &
-         &  q_liq=>null(),  q_ice=>null(),  & ! mass mixing ratio (kg/kg)
-         &  re_liq=>null(), re_ice=>null()    ! effective radius (m)
+#else
+    real(jprb), pointer, contiguous, dimension(:,:) :: &
+#endif
+         &  q_liq,  q_ice,  & ! mass mixing ratio (kg/kg)
+         &  re_liq, re_ice    ! effective radius (m)
 
     ! For the moment, the different types of hydrometeor are assumed
     ! to be mixed with each other, so there is just one cloud fraction
@@ -93,6 +106,10 @@ module radiation_cloud
     procedure :: param_cloud_effective_separation_eta
     procedure :: crop_cloud_fraction
     procedure :: out_of_physical_bounds
+    procedure :: create_device => create_device_cloud
+    procedure :: update_host   => update_host_cloud
+    procedure :: update_device => update_device_cloud
+    procedure :: delete_device => delete_device_cloud
 
   end type cloud_type
 
@@ -105,6 +122,10 @@ contains
   subroutine allocate_cloud_arrays(this, ncol, nlev, ntype, use_inhom_effective_size)
 
     use yomhook,     only : lhook, dr_hook, jphook
+
+! #ifdef _OPENACC
+!     use openacc,       only : acc_attach
+! #endif
 
     class(cloud_type), intent(inout), target :: this
     integer, intent(in)              :: ncol   ! Number of columns
@@ -214,16 +235,17 @@ contains
   ! field. This version assumes a fixed decorrelation_length for all
   ! columns.
   subroutine set_overlap_param_fix(this, thermodynamics, decorrelation_length, &
-       &  istartcol, iendcol)
+       &  istartcol, iendcol, lacc)
 
     use yomhook,                  only : lhook, dr_hook, jphook
     use radiation_thermodynamics, only : thermodynamics_type
     use radiation_constants,      only : GasConstantDryAir, AccelDueToGravity
 
-    class(cloud_type),         intent(inout) :: this
+    class(cloud_type),          intent(inout) :: this
     type(thermodynamics_type), intent(in)    :: thermodynamics
     real(jprb),                intent(in)    :: decorrelation_length ! m
     integer,         optional, intent(in)    :: istartcol, iendcol
+    logical, optional, intent(in) :: lacc
 
     ! Ratio of gas constant for dry air to acceleration due to gravity
     real(jprb), parameter :: R_over_g = GasConstantDryAir / AccelDueToGravity
@@ -238,12 +260,22 @@ contains
 
     real(jphook) :: hook_handle
 
+    logical :: llacc
+
+    select type (this)
+    type is (cloud_type)
     if (lhook) call dr_hook('radiation_cloud:set_overlap_param_fix',0,hook_handle)
 
     ! Pressure at half-levels, pressure_hl, is defined at nlev+1
     ! points
     ncol = size(thermodynamics%pressure_hl,dim=1)
     nlev = size(thermodynamics%pressure_hl,dim=2)-1
+
+    if (present(lacc)) then
+        llacc = lacc
+    else
+        llacc = .false.
+    endif
 
     if (present(istartcol)) then
       i1 = istartcol
@@ -263,20 +295,42 @@ contains
       ! for interfaces between model layers, not for the interface to
       ! space or the surface
       allocate(this%overlap_param(ncol, nlev-1))
+      !$ACC ENTER DATA CREATE(this%overlap_param) ASYNC(1) IF(LLACC)
+#if defined(OMPGPU)
+      !$OMP TARGET ENTER DATA MAP(ALLOC:this%overlap_param) IF(LLACC)
+#endif
     end if
 
+    !$ACC DATA PRESENT(this, thermodynamics) IF(LLACC)
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE FROM(thermodynamics%pressure_hl(:,1:2)) IF(LLACC)
+#endif
+    !$ACC UPDATE HOST(thermodynamics%pressure_hl(i1,1:2)) WAIT(1) IF(LLACC)
     if (thermodynamics%pressure_hl(i1,2) > thermodynamics%pressure_hl(i1,1)) then
       ! Pressure is increasing with index (order of layers is
       ! top-of-atmosphere to surface). In case pressure_hl(:,1)=0, we
       ! don't take the logarithm of the first pressure in each column.
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO IF(LLACC)
+#endif
+      !$ACC PARALLEL DEFAULT(NONE) ASYNC(1) IF(LLACC)
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = i1,i2
         this%overlap_param(jcol,1) = exp(-(R_over_g/decorrelation_length) &
              &                            * thermodynamics%temperature_hl(jcol,2) &
              &                            *log(thermodynamics%pressure_hl(jcol,3) &
              &                                /thermodynamics%pressure_hl(jcol,2)))
       end do
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+      !$ACC LOOP SEQ
       do jlev = 2,nlev-1
+        !$ACC LOOP GANG(STATIC:1) VECTOR
         do jcol = i1,i2
           this%overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length) &
               &                            * thermodynamics%temperature_hl(jcol,jlev+1) &
@@ -284,12 +338,22 @@ contains
               &                                /thermodynamics%pressure_hl(jcol,jlev)))
         end do
       end do
+      !$ACC END PARALLEL
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
     else
        ! Pressure is decreasing with index (order of layers is surface
        ! to top-of-atmosphere).  In case pressure_hl(:,nlev+1)=0, we
        ! don't take the logarithm of the last pressure in each column.
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) IF(LLACC)
+#endif
+      !$ACC PARALLEL DEFAULT(NONE) ASYNC(1) IF(LLACC)
+      !$ACC LOOP SEQ
       do jlev = 1,nlev-2
+        !$ACC LOOP GANG(STATIC:1) VECTOR
         do jcol = i1,i2
           this%overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length) &
               &                            * thermodynamics%temperature_hl(jcol,jlev+1) &
@@ -297,16 +361,32 @@ contains
               &                                /thermodynamics%pressure_hl(jcol,jlev+2)))
         end do
       end do
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO IF(LLACC)
+#endif
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = i1,i2
         this%overlap_param(jcol,nlev-1) = exp(-(R_over_g/decorrelation_length) &
             &                            * thermodynamics%temperature_hl(jcol,nlev) &
             &                            *log(thermodynamics%pressure_hl(jcol,nlev-1) &
             &                                /thermodynamics%pressure_hl(jcol,nlev)))
       end do
+      !$ACC END PARALLEL
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
     end if
 
+    !$ACC END DATA
+
     if (lhook) call dr_hook('radiation_cloud:set_overlap_param_fix',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:set_overlap_param_fix: unexpected dynamic type')
+    end select
 
   end subroutine set_overlap_param_fix
 
@@ -319,16 +399,20 @@ contains
   ! associated to be of the correct size relative to the pressure
   ! field.
   subroutine set_overlap_param_var(this, thermodynamics, decorrelation_length, &
-       &                           istartcol, iendcol)
+       &                           istartcol, iendcol, lacc)
 
     use yomhook,                  only : lhook, dr_hook, jphook
     use radiation_thermodynamics, only : thermodynamics_type
     use radiation_constants,      only : GasConstantDryAir, AccelDueToGravity
+#ifdef _OPENACC
+    use radiation_io,             only : radiation_abort
+#endif
 
-    class(cloud_type),         intent(inout) :: this
+    class(cloud_type),          intent(inout) :: this
     type(thermodynamics_type), intent(in)    :: thermodynamics
     integer,                   intent(in)    :: istartcol, iendcol
     real(jprb),                intent(in)    :: decorrelation_length(istartcol:iendcol) ! m
+    logical, optional, intent(in) :: lacc
 
     ! Ratio of gas constant for dry air to acceleration due to gravity
     real(jprb), parameter :: R_over_g = GasConstantDryAir / AccelDueToGravity
@@ -337,67 +421,154 @@ contains
 
     integer :: jcol, jlev
 
+    logical :: llacc
+
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (cloud_type)
     if (lhook) call dr_hook('radiation_cloud:set_overlap_param_var',0,hook_handle)
+
+    if (present(lacc)) then
+        llacc = lacc
+    else
+        llacc = .false.
+    endif
 
     ! Pressure at half-levels, pressure_hl, is defined at nlev+1
     ! points
     ncol = size(thermodynamics%pressure_hl,dim=1)
     nlev = size(thermodynamics%pressure_hl,dim=2)-1
 
-    if (.not. associated(this%overlap_param)) then
+    ! if (.not. allocated(this%overlap_param)) then
       ! If pressure is of size (ncol,nlev+1) then overlap_param is of
       ! size (ncol,nlev-1), since overlap parameter is only defined here
       ! for interfaces between model layers, not for the interface to
       ! space or the surface
-      allocate(this%overlap_param(ncol, nlev-1))
-    end if
+      ! allocate(this%overlap_param(ncol, nlev-1))
+      ! !$ACC ENTER DATA CREATE(this%overlap_param) ASYNC(1) IF(LLACC)
+    ! end if
 
-    if (thermodynamics%pressure_hl(istartcol,2) > thermodynamics%pressure_hl(istartcol,1)) then
+#if defined(OMPGPU)
+    !$OMP TARGET UPDATE FROM(thermodynamics%pressure_hl(:,1:2)) IF(LLACC)
+#endif
+    !$ACC UPDATE HOST(thermodynamics%pressure_hl(istartcol,1:2)) WAIT(1) IF(LLACC)
+    call set_overlap_param_var_impl(ncol, nlev, this%overlap_param, &
+         &  thermodynamics%pressure_hl, thermodynamics%temperature_hl, &
+         &  decorrelation_length, istartcol, iendcol, &
+         &  thermodynamics%pressure_hl(istartcol,2) > thermodynamics%pressure_hl(istartcol,1), &
+         &  llacc)
+
+    if (lhook) call dr_hook('radiation_cloud:set_overlap_param_var',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:set_overlap_param_var: unexpected dynamic type')
+    end select
+
+  end subroutine set_overlap_param_var
+
+
+  !---------------------------------------------------------------------
+  ! The arrays arrive as explicit-shape dummies rather than being reached
+  ! through this% and thermodynamics%. Referencing an allocatable component
+  ! inside a target region makes the runtime stage that component's array
+  ! descriptor to the device, and the structures are reallocated on every call
+  ! to RADIATION_SCHEME so the descriptors are never already resident. Each
+  ! transfer moves under a hundred bytes but the host blocks for around 70
+  ! microseconds afterwards, and the loops below would otherwise pay for three
+  ! of them apiece.
+  subroutine set_overlap_param_var_impl(ncol, nlev, overlap_param, pressure_hl, &
+       &  temperature_hl, decorrelation_length, istartcol, iendcol, ldincreasing, llacc)
+
+    use radiation_constants, only : GasConstantDryAir, AccelDueToGravity
+
+    integer,    intent(in)    :: ncol, nlev, istartcol, iendcol
+    real(jprb), intent(inout) :: overlap_param(ncol,nlev-1)
+    real(jprb), intent(in)    :: pressure_hl(ncol,nlev+1)
+    real(jprb), intent(in)    :: temperature_hl(ncol,nlev+1)
+    real(jprb), intent(in)    :: decorrelation_length(istartcol:iendcol) ! m
+    logical,    intent(in)    :: ldincreasing, llacc
+
+    ! Ratio of gas constant for dry air to acceleration due to gravity
+    real(jprb), parameter :: R_over_g = GasConstantDryAir / AccelDueToGravity
+
+    integer :: jcol, jlev
+
+    if (ldincreasing) then
       ! Pressure is increasing with index (order of layers is
       ! top-of-atmosphere to surface). In case pressure_hl(:,1)=0, we
       ! don't take the logarithm of the first pressure in each column.
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = istartcol,iendcol
-        this%overlap_param(jcol,1) = exp(-(R_over_g/decorrelation_length(jcol)) &
-             &                            * thermodynamics%temperature_hl(jcol,2) &
-             &                            *log(thermodynamics%pressure_hl(jcol,3) &
-             &                                /thermodynamics%pressure_hl(jcol,2)))
+        overlap_param(jcol,1) = exp(-(R_over_g/decorrelation_length(jcol)) &
+             &                            * temperature_hl(jcol,2) &
+             &                            *log(pressure_hl(jcol,3) &
+             &                                /pressure_hl(jcol,2)))
       end do
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+      !$ACC LOOP SEQ
       do jlev = 2,nlev-1
+        !$ACC LOOP GANG(STATIC:1) VECTOR
         do jcol = istartcol,iendcol
-          this%overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length(jcol)) &
-              &                            * thermodynamics%temperature_hl(jcol,jlev+1) &
-              &                            *log(thermodynamics%pressure_hl(jcol,jlev+2) &
-              &                                /thermodynamics%pressure_hl(jcol,jlev)))
+          overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length(jcol)) &
+              &                            * temperature_hl(jcol,jlev+1) &
+              &                            *log(pressure_hl(jcol,jlev+2) &
+              &                                /pressure_hl(jcol,jlev)))
         end do
       end do
+      !$ACC END PARALLEL
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
     else
        ! Pressure is decreasing with index (order of layers is surface
        ! to top-of-atmosphere).  In case pressure_hl(:,nlev+1)=0, we
        ! don't take the logarithm of the last pressure in each column.
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+      !$ACC LOOP SEQ
       do jlev = 1,nlev-2
+        !$ACC LOOP GANG(STATIC:1) VECTOR
         do jcol = istartcol,iendcol
-          this%overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length(jcol)) &
-              &                            * thermodynamics%temperature_hl(jcol,jlev+1) &
-              &                            *log(thermodynamics%pressure_hl(jcol,jlev) &
-              &                                /thermodynamics%pressure_hl(jcol,jlev+2)))
+          overlap_param(jcol,jlev) = exp(-(0.5_jprb*R_over_g/decorrelation_length(jcol)) &
+              &                            * temperature_hl(jcol,jlev+1) &
+              &                            *log(pressure_hl(jcol,jlev) &
+              &                                /pressure_hl(jcol,jlev+2)))
         end do
       end do
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
+#if defined(OMPGPU)
+      !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = istartcol,iendcol
-        this%overlap_param(jcol,nlev-1) = exp(-(R_over_g/decorrelation_length(jcol)) &
-            &                            * thermodynamics%temperature_hl(jcol,nlev) &
-            &                            *log(thermodynamics%pressure_hl(jcol,nlev-1) &
-            &                                /thermodynamics%pressure_hl(jcol,nlev)))
+        overlap_param(jcol,nlev-1) = exp(-(R_over_g/decorrelation_length(jcol)) &
+            &                            * temperature_hl(jcol,nlev) &
+            &                            *log(pressure_hl(jcol,nlev-1) &
+            &                                /pressure_hl(jcol,nlev)))
       end do
+      !$ACC END PARALLEL
+#if defined(OMPGPU)
+      !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
     end if
 
-    if (lhook) call dr_hook('radiation_cloud:set_overlap_param_var',1,hook_handle)
-
-  end subroutine set_overlap_param_var
+  end subroutine set_overlap_param_var_impl
 
 
   !---------------------------------------------------------------------
@@ -487,29 +658,76 @@ contains
   !---------------------------------------------------------------------
   ! Create a matrix of constant fractional standard deviations
   ! (dimensionless)
-  subroutine create_fractional_std(this, ncol, nlev, frac_std)
+  subroutine create_fractional_std(this, ncol, nlev, frac_std, lacc)
 
     use yomhook,                  only : lhook, dr_hook, jphook
 
-    class(cloud_type), intent(inout) :: this
+    class(cloud_type),  intent(inout) :: this
     integer,           intent(in)    :: ncol, nlev
     real(jprb),        intent(in)    :: frac_std
+    logical, optional, intent(in) :: lacc
+
+    integer :: jcol, jlev
+    logical :: llacc
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (cloud_type)
+    if (present(lacc)) then
+        llacc = lacc
+    else
+        llacc = .false.
+    endif
+
     if (lhook) call dr_hook('radiation_cloud:create_fractional_std',0,hook_handle)
 
-    if (associated(this%fractional_std)) then
-       deallocate(this%fractional_std)
-    end if
-    
-    allocate(this%fractional_std(ncol, nlev))
+    ! if (allocated(this%fractional_std)) then
+       ! !$ACC EXIT DATA DELETE(this%fractional_std) WAIT(1) IF(LLACC)
+       ! deallocate(this%fractional_std)
+    ! end if
 
-    this%fractional_std = frac_std
+    ! allocate(this%fractional_std(ncol, nlev))
+    ! !$ACC ENTER DATA CREATE(this%fractional_std) ASYNC(1) IF(LLACC)
+
+    call fill_2d_impl(ncol, nlev, this%fractional_std, frac_std, llacc)
 
     if (lhook) call dr_hook('radiation_cloud:create_fractional_std',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:create_fractional_std: unexpected dynamic type')
+    end select
 
   end subroutine create_fractional_std
+
+
+  !---------------------------------------------------------------------
+  ! See set_overlap_param_var_impl for why the array is an explicit-shape
+  ! dummy.
+  subroutine fill_2d_impl(ncol, nlev, field, value, llacc)
+
+    integer,    intent(in)    :: ncol, nlev
+    real(jprb), intent(inout) :: field(ncol,nlev)
+    real(jprb), intent(in)    :: value
+    logical,    intent(in)    :: llacc
+
+    integer :: jcol, jlev
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR COLLAPSE(2)
+    do jlev = 1, nlev
+      do jcol = 1, ncol
+        field(jcol, jlev) = value
+      end do
+    end do
+    !$ACC END PARALLEL
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+  end subroutine fill_2d_impl
 
 
   !---------------------------------------------------------------------
@@ -529,7 +747,7 @@ contains
     if (associated(this%inv_cloud_effective_size)) then
        deallocate(this%inv_cloud_effective_size)
     end if
-    
+
     allocate(this%inv_cloud_effective_size(ncol, nlev))
 
     this%inv_cloud_effective_size = inv_eff_size
@@ -576,7 +794,7 @@ contains
     if (associated(this%inv_cloud_effective_size)) then
       deallocate(this%inv_cloud_effective_size)
     end if
-    
+
     allocate(this%inv_cloud_effective_size(ncol, nlev))
 
     if (present(istartcol)) then
@@ -619,7 +837,7 @@ contains
   ! Create a matrix of inverse cloud and inhomogeneity effective size
   ! (m-1) parameterized according to the value of eta (=pressure
   ! divided by surface pressure): effective_separation =
-  ! coeff_a + coeff_b*exp(-(eta**power)).  
+  ! coeff_a + coeff_b*exp(-(eta**power)).
   subroutine param_cloud_effective_separation_eta(this, ncol, nlev, &
        &  pressure_hl, separation_surf, separation_toa, power, &
        &  inhom_separation_factor, istartcol, iendcol)
@@ -655,6 +873,8 @@ contains
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (cloud_type)
     if (lhook) call dr_hook('radiation_cloud:param_cloud_effective_separation_eta',0,hook_handle)
 
     if (present(inhom_separation_factor)) then
@@ -673,7 +893,7 @@ contains
      if (associated(this%inv_inhom_effective_size)) then
       deallocate(this%inv_inhom_effective_size)
     end if
-   
+
     allocate(this%inv_cloud_effective_size(ncol, nlev))
     allocate(this%inv_inhom_effective_size(ncol, nlev))
 
@@ -707,6 +927,9 @@ contains
     end do
 
     if (lhook) call dr_hook('radiation_cloud:param_cloud_effective_separation_eta',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:param_cloud_effective_separation_eta: unexpected dynamic type')
+    end select
 
   end subroutine param_cloud_effective_separation_eta
 
@@ -720,34 +943,63 @@ contains
   ! then cloud is really present and should be treated.
   subroutine crop_cloud_fraction(this, istartcol, iendcol, &
        &    cloud_fraction_threshold, cloud_mixing_ratio_threshold)
-    
+
     use yomhook, only : lhook, dr_hook, jphook
 
     class(cloud_type), intent(inout) :: this
     integer,           intent(in)    :: istartcol, iendcol
 
-    integer :: nlev, ntype
+    integer :: nlev
     integer :: jcol, jlev, jh
 
     real(jprb) :: cloud_fraction_threshold, cloud_mixing_ratio_threshold
     real(jprb) :: sum_mixing_ratio(istartcol:iendcol)
+    real(jprb) :: sum_mixing_ratio_col
 
     real(jphook) :: hook_handle
 
+    select type (this)
+    type is (cloud_type)
     if (lhook) call dr_hook('radiation_cloud:crop_cloud_fraction',0,hook_handle)
 
-    nlev  = size(this%fraction,2)
-    ntype = size(this%mixing_ratio,3)
-    
+    nlev = size(this%fraction,2)
+
+#if defined(OMPGPU)
+    ! The sum is only live within one (jlev,jcol) iteration, so a private
+    ! scalar serves and there is nothing to map. With the level loop outside
+    ! the target region this launched one kernel per level, each with only
+    ! iendcol-istartcol+1 work items, which left most of the device idle and
+    ! cost more in launch overhead than the arithmetic it performed.
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(sum_mixing_ratio_col, jh)
     do jlev = 1,nlev
+      do jcol = istartcol,iendcol
+         sum_mixing_ratio_col = 0.0_jprb
+         do jh = 1, this%ntype
+            sum_mixing_ratio_col = sum_mixing_ratio_col + this%mixing_ratio(jcol,jlev,jh)
+         end do
+         if (this%fraction(jcol,jlev)            < cloud_fraction_threshold &
+              &  .or. sum_mixing_ratio_col       < cloud_mixing_ratio_threshold) then
+            this%fraction(jcol,jlev) = 0.0_jprb
+        end if
+      end do
+    end do
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#else
+    !$ACC PARALLEL DEFAULT(PRESENT) CREATE(sum_mixing_ratio) ASYNC(1)
+    !$ACC LOOP SEQ
+    do jlev = 1,nlev
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = istartcol,iendcol
         sum_mixing_ratio(jcol) = 0.0_jprb
       end do
-      do jh = 1, ntype
+      !$ACC LOOP SEQ
+      do jh = 1, this%ntype
+        !$ACC LOOP GANG(STATIC:1) VECTOR
         do jcol = istartcol,iendcol
           sum_mixing_ratio(jcol) = sum_mixing_ratio(jcol) + this%mixing_ratio(jcol,jlev,jh)
         end do
       end do
+      !$ACC LOOP GANG(STATIC:1) VECTOR
       do jcol = istartcol,iendcol
         if (this%fraction(jcol,jlev)        < cloud_fraction_threshold &
              &  .or. sum_mixing_ratio(jcol) < cloud_mixing_ratio_threshold) then
@@ -755,8 +1007,13 @@ contains
         end if
       end do
     end do
+    !$ACC END PARALLEL
+#endif
 
     if (lhook) call dr_hook('radiation_cloud:crop_cloud_fraction',1,hook_handle)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:crop_cloud_fraction: unexpected dynamic type')
+    end select
 
   end subroutine crop_cloud_fraction
 
@@ -804,5 +1061,160 @@ contains
     if (lhook) call dr_hook('radiation_cloud:out_of_physical_bounds',1,hook_handle)
 
   end function out_of_physical_bounds
-  
+
+  !---------------------------------------------------------------------
+  ! creates fields on device
+  subroutine create_device_cloud(this)
+
+    class(cloud_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (cloud_type)
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%effective_radius) IF(allocated(this%effective_radius))
+    !$OMP TARGET ENTER DATA MAP(TO:this%q_liq) IF(associated(this%q_liq))
+    !$OMP TARGET ENTER DATA MAP(TO:this%re_liq) IF(associated(this%re_liq))
+    !$OMP TARGET ENTER DATA MAP(TO:this%q_ice) IF(associated(this%q_ice))
+    !$OMP TARGET ENTER DATA MAP(TO:this%re_ice) IF(associated(this%re_ice))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%fraction) IF(allocated(this%fraction))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%overlap_param) IF(allocated(this%overlap_param))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%fractional_std) IF(allocated(this%fractional_std))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size))
+    !$OMP TARGET ENTER DATA MAP(ALLOC:this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size))
+
+    !$ACC ENTER DATA CREATE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%effective_radius) IF(allocated(this%effective_radius)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%q_liq) IF(allocated(this%q_liq)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%re_liq) IF(allocated(this%re_liq)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%q_ice) IF(allocated(this%q_ice)) ASYNC(1)
+    !$ACC ENTER DATA COPYIN(this%re_ice) IF(allocated(this%re_ice)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%fraction) IF(allocated(this%fraction)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%overlap_param) IF(allocated(this%overlap_param)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%fractional_std) IF(allocated(this%fractional_std)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size)) ASYNC(1)
+    !$ACC ENTER DATA CREATE(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:create_device_cloud: unexpected dynamic type')
+    end select
+#endif
+  end subroutine create_device_cloud
+
+  !---------------------------------------------------------------------
+  ! updates fields on host
+  subroutine update_host_cloud(this)
+
+    class(cloud_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (cloud_type)
+    !$OMP TARGET UPDATE FROM(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET UPDATE FROM(this%effective_radius) IF(allocated(this%effective_radius))
+    !$OMP TARGET UPDATE FROM(this%fraction) IF(allocated(this%fraction))
+    !$OMP TARGET UPDATE FROM(this%overlap_param) IF(allocated(this%overlap_param))
+    !$OMP TARGET UPDATE FROM(this%fractional_std) IF(allocated(this%fractional_std))
+    !$OMP TARGET UPDATE FROM(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size))
+    !$OMP TARGET UPDATE FROM(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size))
+
+    !$ACC UPDATE HOST(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC UPDATE HOST(this%effective_radius) IF(allocated(this%effective_radius)) ASYNC(1)
+    !$ACC UPDATE HOST(this%fraction) IF(allocated(this%fraction)) ASYNC(1)
+    !$ACC UPDATE HOST(this%overlap_param) IF(allocated(this%overlap_param)) ASYNC(1)
+    !$ACC UPDATE HOST(this%fractional_std) IF(allocated(this%fractional_std)) ASYNC(1)
+    !$ACC UPDATE HOST(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size)) ASYNC(1)
+    !$ACC UPDATE HOST(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:update_host_cloud: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_host_cloud
+
+  !---------------------------------------------------------------------
+  ! updates fields on device
+  subroutine update_device_cloud(this)
+
+#if defined(_OPENACC)
+    use openacc,       only : acc_attach
+#endif
+    class(cloud_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (cloud_type)
+    !$OMP TARGET UPDATE TO(this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET UPDATE TO(this%effective_radius) IF(allocated(this%effective_radius))
+#if defined(OMPGPU)
+#ifdef DEBUG_WARNING
+    write(nulout,'(a,a,a,i0,a)') "    ", __FILE__, " : LINE = ", __LINE__, " has OpenACC code, acc_attach, that is not ported. Not sure what to do with this yet."
+#endif
+    !! What do I do here : PJM 3-31/2025
+    !CALL acc_attach(this%q_liq)
+    !CALL acc_attach(this%q_ice)
+    !CALL acc_attach(this%re_liq)
+    !CALL acc_attach(this%re_ice)
+#endif
+    !$OMP TARGET UPDATE TO(this%fraction) IF(allocated(this%fraction))
+    !$OMP TARGET UPDATE TO(this%overlap_param) IF(allocated(this%overlap_param))
+    !$OMP TARGET UPDATE TO(this%fractional_std) IF(allocated(this%fractional_std))
+    !$OMP TARGET UPDATE TO(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size))
+    !$OMP TARGET UPDATE TO(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size))
+
+    !$ACC UPDATE DEVICE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%effective_radius) IF(allocated(this%effective_radius)) ASYNC(1)
+#if defined(_OPENACC)
+    CALL acc_attach(this%q_liq)
+    CALL acc_attach(this%q_ice)
+    CALL acc_attach(this%re_liq)
+    CALL acc_attach(this%re_ice)
+#endif
+    !$ACC UPDATE DEVICE(this%fraction) IF(allocated(this%fraction)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%overlap_param) IF(allocated(this%overlap_param)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%fractional_std) IF(allocated(this%fractional_std)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size)) ASYNC(1)
+    !$ACC UPDATE DEVICE(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:update_device_cloud: unexpected dynamic type')
+    end select
+#endif
+  end subroutine update_device_cloud
+
+  !---------------------------------------------------------------------
+  ! deletes fields on device
+  subroutine delete_device_cloud(this)
+
+    class(cloud_type), intent(inout) :: this
+
+#if defined(_OPENACC)  || defined(OMPGPU)
+    select type (this)
+    type is (cloud_type)
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%mixing_ratio) IF(allocated(this%mixing_ratio))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%effective_radius) IF(allocated(this%effective_radius))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%q_liq) IF(associated(this%q_liq))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%re_liq) IF(associated(this%re_liq))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%q_ice) IF(associated(this%q_ice))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%re_ice) IF(associated(this%re_ice))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%fraction) IF(allocated(this%fraction))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%overlap_param) IF(allocated(this%overlap_param))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%fractional_std) IF(allocated(this%fractional_std))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size))
+    !$OMP TARGET EXIT DATA MAP(DELETE:this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size))
+
+    !$ACC EXIT DATA DELETE(this%mixing_ratio) IF(allocated(this%mixing_ratio)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%effective_radius) IF(allocated(this%effective_radius)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%q_liq) IF(allocated(this%q_liq)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%re_liq) IF(allocated(this%re_liq)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%q_ice) IF(allocated(this%q_ice)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%re_ice) IF(allocated(this%re_ice)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%fraction) IF(allocated(this%fraction)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%overlap_param) IF(allocated(this%overlap_param)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%fractional_std) IF(allocated(this%fractional_std)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%inv_cloud_effective_size) IF(allocated(this%inv_cloud_effective_size)) ASYNC(1)
+    !$ACC EXIT DATA DELETE(this%inv_inhom_effective_size) IF(allocated(this%inv_inhom_effective_size)) ASYNC(1)
+    class default
+      call radiation_abort('*** Error: radiation_cloud:delete_device_cloud: unexpected dynamic type')
+    end select
+#endif
+  end subroutine delete_device_cloud
+
 end module radiation_cloud

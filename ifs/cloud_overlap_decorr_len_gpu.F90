@@ -1,0 +1,184 @@
+! (C) Copyright 2005- ECMWF.
+!
+! This software is licensed under the terms of the Apache Licence Version 2.0
+! which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
+!
+! In applying this licence, ECMWF does not waive the privileges and immunities
+! granted to it by virtue of its status as an intergovernmental organisation
+! nor does it submit to any jurisdiction.
+
+SUBROUTINE CLOUD_OVERLAP_DECORR_LEN &
+     & (KIDIA, KFDIA, KLON, PGEMU, KDECOLAT, &
+     &  PDECORR_LEN_EDGES_KM, PDECORR_LEN_WATER_KM, PDECORR_LEN_RATIO, LACC)
+
+! CLOUD_OVERLAP_DECORR_LEN
+!
+! PURPOSE
+! -------
+!   Calculate the cloud overlap decorrelation length as a function of
+!   latitude for use in the radiation scheme
+!
+! INTERFACE
+! ---------
+!   CLOUD_OVERLAP_DECORR_LEN is called from RADLSWR and RADIATION_SCHEME
+!
+! AUTHOR
+! ------
+!   Robin Hogan, ECMWF (using code extracted from radlswr.F90)
+!   Original: 2016-02-16
+!
+! MODIFICATIONS
+! -------------
+! -------------
+! L. Descamps, M-F, Feb 2020 : Two hard-coded values are tranformed into
+! parameters that can be perturbed in random parameters scheme for PEARP
+
+! -------------------------------------------------------------------
+
+USE PARKIND1 , ONLY : JPIM, JPRB
+USE YOMHOOK  , ONLY : LHOOK, DR_HOOK, JPHOOK
+USE YOMCST_ECRAD, ONLY : RPI
+USE YOECLD   , ONLY : RDECORR_CF, RDECORR_CW
+
+! -------------------------------------------------------------------
+
+IMPLICIT NONE
+
+! INPUT ARGUMENTS
+
+! *** Array dimensions and ranges
+INTEGER(KIND=JPIM),INTENT(IN) :: KIDIA    ! Start column to process
+INTEGER(KIND=JPIM),INTENT(IN) :: KFDIA    ! End column to process
+INTEGER(KIND=JPIM),INTENT(IN) :: KLON     ! Number of columns
+
+! *** Configuration variable controlling the overlap scheme
+INTEGER(KIND=JPIM),INTENT(IN) :: KDECOLAT
+
+! *** Single-level variables
+REAL(KIND=JPRB),   INTENT(IN) :: PGEMU(KLON) ! Sine of latitude
+
+! OUTPUT ARGUMENTS
+
+! *** Decorrelation lengths for cloud edges and cloud water content,
+! *** in km
+REAL(KIND=JPRB), INTENT(OUT)           :: PDECORR_LEN_EDGES_KM(KLON)
+REAL(KIND=JPRB), INTENT(OUT), OPTIONAL :: PDECORR_LEN_WATER_KM(KLON)
+
+! Ratio of water-content to cloud-edge decorrelation lengths
+REAL(KIND=JPRB), INTENT(OUT), OPTIONAL :: PDECORR_LEN_RATIO
+
+LOGICAL,         INTENT(IN),  OPTIONAL :: LACC
+
+! LOCAL VARIABLES
+
+REAL(KIND=JPRB) :: ZRADIANS_TO_DEGREES, ZABS_LAT_DEG, ZCOS_LAT
+
+INTEGER(KIND=JPIM) :: JL
+
+LOGICAL :: LLACC
+
+REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
+
+! -------------------------------------------------------------------
+
+IF (LHOOK) CALL DR_HOOK('CLOUD_OVERLAP_DECORR_LEN',0,ZHOOK_HANDLE)
+
+IF (PRESENT(LACC)) THEN
+  LLACC = LACC
+ELSE
+  LLACC = .FALSE.
+ENDIF
+
+! -------------------------------------------------------------------
+
+IF (KDECOLAT == 0) THEN
+
+  ! Decorrelation lengths are constant values
+#if defined(_OPENACC)
+  !$ACC KERNELS DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+  PDECORR_LEN_EDGES_KM(KIDIA:KFDIA) = RDECORR_CF
+  IF (PRESENT(PDECORR_LEN_WATER_KM)) THEN
+    PDECORR_LEN_WATER_KM(KIDIA:KFDIA) = RDECORR_CW
+  ENDIF
+  IF (PRESENT(PDECORR_LEN_RATIO)) THEN
+    PDECORR_LEN_RATIO = RDECORR_CW / RDECORR_CF
+  ENDIF
+  !$ACC END KERNELS
+#endif
+#if defined(OMPGPU)
+  !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO IF(LLACC)
+  DO JL = KIDIA,KFDIA
+     PDECORR_LEN_EDGES_KM(JL) = RDECORR_CF
+  ENDDO
+  !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+  IF (PRESENT(PDECORR_LEN_WATER_KM)) THEN
+     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO IF(LLACC)
+     DO JL = KIDIA,KFDIA
+        PDECORR_LEN_WATER_KM(JL) = RDECORR_CW
+     ENDDO
+     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+  ENDIF
+  IF (PRESENT(PDECORR_LEN_RATIO)) THEN
+    !$OMP TARGET IF(LLACC)
+    PDECORR_LEN_RATIO = RDECORR_CW / RDECORR_CF
+    !$OMP END TARGET
+  ENDIF
+#endif
+
+ELSE
+
+  ZRADIANS_TO_DEGREES = 180.0_JPRB / RPI
+
+  IF (KDECOLAT == 1) THEN
+    ! Shonk et al. (2010) Eq. 13 formula
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(ZABS_LAT_DEG) IF(LLACC)
+    !$ACC PARALLEL DEFAULT(NONE) PRESENT(PGEMU, PDECORR_LEN_EDGES_KM) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR PRIVATE(ZABS_LAT_DEG)
+    DO JL = KIDIA,KFDIA
+      ZABS_LAT_DEG = ABS(ASIN(PGEMU(JL)) * ZRADIANS_TO_DEGREES)
+      PDECORR_LEN_EDGES_KM(JL) = 2.899_JPRB - 0.02759_JPRB * ZABS_LAT_DEG
+    ENDDO
+    !$ACC END PARALLEL
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+  ELSE ! KDECOLAT == 2
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(ZCOS_LAT) IF(LLACC)
+    !$ACC PARALLEL DEFAULT(NONE) PRESENT(PGEMU, PDECORR_LEN_EDGES_KM) ASYNC(1) IF(LLACC)
+    !$ACC LOOP GANG VECTOR PRIVATE(ZCOS_LAT)
+    DO JL = KIDIA,KFDIA
+      ! Shonk et al. (2010) but smoothed over the equator
+      ZCOS_LAT = COS(ASIN(PGEMU(JL)))
+      PDECORR_LEN_EDGES_KM(JL) = 0.75_JPRB + (2.149_JPRB * ZCOS_LAT*ZCOS_LAT)
+      ! PDECORR_LEN_EDGES_KM(JL) =ZCA+(ZCB*ZCOS_LAT*ZCOS_LAT)
+    ENDDO
+    !$ACC END PARALLEL
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+  ENDIF
+
+  ! Both KDECOLAT = 1 and 2 assume that the decorrelation length for
+  ! cloud water content is half that for cloud edges
+  IF (PRESENT(PDECORR_LEN_WATER_KM)) THEN
+#if defined(_OPENACC)
+  !$ACC KERNELS DEFAULT(PRESENT) ASYNC(1) IF(LLACC)
+    PDECORR_LEN_WATER_KM(KIDIA:KFDIA) = PDECORR_LEN_EDGES_KM(KIDIA:KFDIA) * 0.5_JPRB
+  !$ACC END KERNELS
+#endif
+#if defined(OMPGPU)
+  !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO IF(LLACC)
+  DO JL = KIDIA,KFDIA
+    PDECORR_LEN_WATER_KM(JL) = PDECORR_LEN_EDGES_KM(JL) * 0.5_JPRB
+  ENDDO
+  !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+  ENDIF
+
+  IF (PRESENT(PDECORR_LEN_RATIO)) THEN
+    PDECORR_LEN_RATIO = 0.5_JPRB
+  ENDIF
+
+ENDIF
+
+! -------------------------------------------------------------------
+
+IF (LHOOK) CALL DR_HOOK('CLOUD_OVERLAP_DECORR_LEN',1,ZHOOK_HANDLE)
+
+END SUBROUTINE CLOUD_OVERLAP_DECORR_LEN

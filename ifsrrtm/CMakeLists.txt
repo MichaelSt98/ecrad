@@ -11,6 +11,7 @@ set( ifsrrtm_SOURCES
         modify_wv_continuum.F90
         parrrtm.F90
         parsrtm.F90
+        rrtm_utils.F90
         rrtm_cmbgb1.F90
         rrtm_cmbgb10.F90
         rrtm_cmbgb11.F90
@@ -216,6 +217,8 @@ set( ifsrrtm_HEADERS
         ${PROJECT_SOURCE_DIR}/include/srtm_init.intfb.h
 )
 
+ecrad_select_gpu_sources( ifsrrtm_SOURCES )
+
 ecbuild_add_library(
     TARGET ifsrrtm.${PREC}
     TYPE OBJECT
@@ -229,7 +232,21 @@ ecbuild_add_library(
         ecrad_base.${PREC}
         ecrad_utilities.${PREC}
         ecrad_ifsaux.${PREC}
+    PUBLIC_LIBS
+        $<${HAVE_ACC}:OpenACC::OpenACC_Fortran>
+        $<${HAVE_ROCTX}:${ROCTX_LIBRARIES}>
+    PRIVATE_DEFINITIONS ${GPU_OFFLOAD}GPU
 )
+
+# To ensure device code is generated and all link time dependencies are
+# available with OpenMP target offloading, force the `-mp=gpu` flag for NVHPC
+if( HAVE_GPU AND HAVE_OMP AND GPU_OFFLOAD STREQUAL "OMP" )
+    target_link_libraries( ifsrrtm.${PREC} PUBLIC OpenMP::OpenMP_Fortran )
+    if( CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC" )
+        target_compile_options( ifsrrtm.${PREC} PRIVATE "-mp=gpu" )
+        target_link_options( ifsrrtm.${PREC} PRIVATE "-mp=gpu" )
+    endif()
+endif()
 
 install(
     FILES
