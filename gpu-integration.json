@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-11-03",
+  "status": "paused_for_rrtmg_layout_decision",
+  "integration_branch": "nams-main-gpu",
+  "requirements": {
+    "backends": ["CPU", "OpenACC", "OpenMP target"],
+    "preserve_main_cpu_performance": true,
+    "standalone_driver_batching": true,
+    "caller_owned_batch_orchestration_allowed": true,
+    "preserve_contributor_attribution": true
+  },
+  "sources": [
+    {
+      "repository": "https://github.com/ecmwf-ifs/ecrad.git",
+      "branch": "main",
+      "commit": "54fe9cb77abb63adf7f746f0adee449e73291d79",
+      "role": "integration_base"
+    },
+    {
+      "repository": "https://github.com/ecmwf-ifs/ecrad.git",
+      "branch": "master-acc",
+      "commit": "0614ad1221c579e382872ce6a409fffff5acf8cd",
+      "role": "established_openacc_reference"
+    },
+    {
+      "repository": "https://github.com/ecmwf-ifs/ecrad.git",
+      "branch": "master-omp",
+      "commit": "b97c15f6be31a5a48c7c76f5437a9d46800e8bee",
+      "role": "established_dual_backend_reference"
+    },
+    {
+      "repository": "https://github.com/MichaelSt98/ecrad.git",
+      "branch": "nams-1.7.1-acc-opt-small-np-block-batch",
+      "commit": "475b28a9f000cd509f9bec9d9868dae2bc726d72",
+      "role": "openacc_small_block_and_execution_tile_source"
+    },
+    {
+      "repository": "https://github.com/PaulMullowney/ecrad.git",
+      "branch": "master-omp-tiled",
+      "commit": "01f3110738aad100bb9bab8473396f221ef3c242",
+      "role": "openmp_execution_tile_source"
+    },
+    {
+      "repository": "https://github.com/PaulMullowney/ecrad.git",
+      "branch": "master-omp-raps",
+      "commit": "2d3a8ff95717413c1fa74c6ccab317a3d9fe2c61",
+      "role": "openmp_tiling_and_host_coupling_source"
+    }
+  ],
+  "history_audit": {
+    "main_omp_merge_base": "ca579f06d2426e182aa5d3dea2bff306f1b162ac",
+    "unique_nonmerge_source_commits_not_in_main": 225,
+    "exact_patch_equivalence_method": "git show --pretty=medium --no-renames --stdin | git patch-id --stable",
+    "exact_patch_equivalence_groups": [
+      [
+        "122ffcb54de4cb9145115932b429f995f7794d43",
+        "1ab7a584c0fff5d9b4155b6d679bfc793e398304"
+      ]
+    ],
+    "limitations": [
+      "Patch identity is not semantic equivalence: adapted and LLM-rebased changes still require code-level comparison.",
+      "Author fields are provenance evidence, not proof of independent authorship.",
+      "The complete topic-by-topic contribution map has not yet been established."
+    ],
+    "known_adaptation": {
+      "adaptation": "9b0f55d",
+      "source": "57a7d3431b4ec02cc6bb74fb6378ea0f231d78ab",
+      "evidence": "The adaptation commit message explicitly credits the source gas lacc-forwarding correction."
+    },
+    "raps_contains_tiled": true
+  },
+  "merge_preview": {
+    "command": "git merge-tree --write-tree --name-only --no-messages 54fe9cb77abb63adf7f746f0adee449e73291d79 b97c15f6be31a5a48c7c76f5437a9d46800e8bee",
+    "exit_status": 1,
+    "conflicted_paths": 138,
+    "conflicts_by_directory": {
+      ".github": 2,
+      "bin": 1,
+      "driver": 6,
+      "ifs": 9,
+      "ifsaux": 3,
+      "ifsrrtm": 73,
+      "include": 31,
+      "radiation": 11,
+      "test": 2
+    },
+    "worktree_merge_started": false
+  },
+  "rrtmg_layout_decision": {
+    "main_layout_commits": [
+      {"commit": "ee9ad24", "subject": "Transpose g-point dimension to first in LW gas optics data arrays"},
+      {"commit": "23edde0", "subject": "Transpose g-point dimension to first in LW taumol routines and driver"},
+      {"commit": "eb770bd", "subject": "Transpose g-point dimension to first in SW gas optics data arrays"},
+      {"commit": "8df8a9b", "subject": "Transpose g-point dimension to first in SW taumol routines and driver"}
+    ],
+    "representative_coefficient": {
+      "file": "ifsrrtm/yoerrta3.F90",
+      "main": "ABSA(NG3,585)",
+      "master_omp": "ABSA(585,NG3)"
+    },
+    "representative_longwave_output": {
+      "file": "include/rrtm_taumol1.intfb.h",
+      "main": "P_TAU(JPGPT,KIDIA:KFDIA,KLEV)",
+      "master_omp": "P_TAU(JPGPT,KLEV,KIDIA:KFDIA)"
+    },
+    "recommended_direction": "Preserve main's CPU implementation and coefficient layouts; adapt GPU kernels and interfaces in validated stages, retaining backend-specific output layouts only where justified.",
+    "alternative": "Select legacy GPU coefficient and kernel layouts at build time while retaining main's CPU path, accepting additional layout-dependent maintenance.",
+    "decision": null
+  },
+  "validation": {
+    "physics_changes_made": false,
+    "builds_run": false,
+    "numerical_tests_run": false,
+    "performance_tests_run": false
+  }
+}
