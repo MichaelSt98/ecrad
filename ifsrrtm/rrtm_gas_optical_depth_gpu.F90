@@ -97,7 +97,8 @@ IF (LHOOK) CALL DR_HOOK('RRTM_GAS_OPTICAL_DEPTH',0,ZHOOK_HANDLE)
 !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
 do k=1,SIZE(PFRAC,3)
    do j=1,SIZE(PFRAC,2)
-      do i=1,SIZE(PFRAC,1)
+      ! PFRAC retains the active block's column bounds, not a 1-based view.
+      do i=KIDIA,KFDIA
          PFRAC(i,j,k) = 0.0_jprb
       end do
    end do

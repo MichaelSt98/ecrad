@@ -352,5 +352,39 @@
       "Build emits nvlink warnings for unused sm_70/sm_75 architectures; cc80 execution succeeds on A100.",
       "No performance or host-thread concurrency conclusions have been established."
     ]
+  },
+  "blocking_and_repeat_checkpoint": {
+    "runner": "test/ifs/check_gpu_blocking.py",
+    "configuration": "build/acc/gpu-smoke.nam",
+    "input": "test/ifs/ecrad_meridian.nc (32 columns)",
+    "drivers": ["ecrad", "ecrad_ifs", "ecrad_ifs_blocked"],
+    "precisions": ["dp", "sp"],
+    "block_sizes": [1, 7, 15, 32, 33],
+    "repeat_counts": [1, 3],
+    "offset_range": {"first": 5, "last": 29, "block_size": 7},
+    "runs_passed_per_backend": {"CPU": 74, "ACC": 74, "OMP": 74},
+    "within_backend_maximum_saved_numeric_difference": 0.0,
+    "cpu_reference_comparison_thresholds_W_m2": {"lw": 0.001, "sw": 0.1},
+    "maximum_cpu_reference_difference_W_m2": {
+      "ACC": 0.0108642578125,
+      "OMP": 0.010986328125
+    },
+    "gpu_jobs": {"ACC": "35634810_0", "OMP": "35634810_1"},
+    "results": "build/blocking-audit/{cpu,acc,omp}/summary.json",
+    "regression_fixed": {
+      "file": "ifsrrtm/rrtm_gas_optical_depth_gpu.F90",
+      "cause": "The OpenMP PFRAC initialisation used 1:SIZE(PFRAC,1), although the explicit-shape dummy retains KIDIA:KFDIA bounds. Later blocks wrote before the allocation.",
+      "correction": "Initialise columns KIDIA:KFDIA.",
+      "origin": "The same loop is present in the pinned master-omp source, introduced in 705fe83f; this is an inherited defect exposed by broader validation.",
+      "initial_failure_job": "35630274_1",
+      "sanitizer_before": "35632523: invalid global write at rrtm_gas_optical_depth_gpu.F90:101, before the later canopy failure reported by the ordinary runtime.",
+      "sanitizer_after": "35634809: the same ecrad_ifs_dp one-column/three-repeat reproducer completes with ERROR SUMMARY: 0 errors."
+    },
+    "limitations": [
+      "IFS blocked drivers ignore istartcol/iendcol; offset-range cases apply only to standalone and flat IFS drivers.",
+      "Only active columns are compared; values outside the requested driver range are not prescribed.",
+      "OMP_NUM_THREADS=1 validates sequential reuse, not host-thread concurrency.",
+      "The runner requires BITIDENTITY_TESTING, both precisions, all selected drivers and the controlled McICA ACC namelist."
+    ]
   }
 }
