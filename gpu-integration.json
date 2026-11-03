@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "openacc_matched_sampler_baseline_validated",
+  "status": "acc_and_omp_matched_sampler_baselines_validated",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -245,8 +245,7 @@
     ],
     "remaining_build_issues": [
       "Inherited NVHPC inline-library extraction remains unresolved; correctness builds explicitly disable it. No performance conclusion is drawn from these builds.",
-      "A separate O0 diagnostic run stopped at an unmapped cloud-optics scratch array, before the later spectral aggregation stage.",
-      "OpenMP-target compilation and device validation have not yet run."
+      "A separate O0 diagnostic run stopped at an unmapped cloud-optics scratch array, before the later spectral aggregation stage."
     ],
     "cpu_rechecked_after_gpu_changes": {
       "tests_passed": 184,
@@ -295,6 +294,63 @@
         "contribution": "Exact assignment-key matching to avoid prefix aliasing in change_namelist.sh."
       }
     ],
-    "next_investigation": "Establish OpenMP-target compilation and matched-sampler device parity before integrating execution tiling and RAPS coupling changes."
+    "next_investigation": "Broaden accelerator coverage and integrate execution tiling and RAPS coupling changes, preserving the validated matched-sampler baselines."
+  },
+  "openmp_target_checkpoint": {
+    "compiler": "NVHPC 24.5",
+    "device": "NVIDIA A100-SXM4-40GB",
+    "build_directory": "build/omp",
+    "build_succeeded": true,
+    "build_options": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "ECRAD_GPU_BACKEND": "OMP",
+      "ENABLE_FIAT": "OFF",
+      "ENABLE_FIELD_API": "OFF",
+      "ENABLE_SINGLE_PRECISION": "ON",
+      "ENABLE_BITIDENTITY_TESTING": "ON",
+      "BUILD_SHARED_LIBS": "OFF",
+      "ECRAD_Fortran_FLAGS": "-O3 -Mrecursive -gpu=cc80",
+      "ECRAD_ENABLE_NVHPC_INLINE_LIBRARY": "OFF"
+    },
+    "runtime_environment": {
+      "OMP_NUM_THREADS": "1",
+      "OMP_TARGET_OFFLOAD": "MANDATORY"
+    },
+    "full_radiation_smoke": {
+      "job": "35622736",
+      "job_script": "build/omp-smoke.sbatch",
+      "log": "build/omp-smoke-35622736.log",
+      "processes_completed": 6,
+      "drivers": ["ecrad", "ecrad_ifs", "ecrad_ifs_blocked"],
+      "precisions": ["dp", "sp"],
+      "configuration": "build/acc/gpu-smoke.nam",
+      "input": "test/ifs/ecrad_meridian.nc",
+      "blocked_nproma": 15,
+      "matched_cpu_comparisons_passed": 6,
+      "matched_openacc_comparisons_passed": 6,
+      "comparison_thresholds_W_m2": {"lw": 0.001, "sw": 0.1},
+      "maximum_net_flux_difference_against_matched_cpu_W_m2": {
+        "dp_lw": 7.658115919184638e-9,
+        "dp_sw": 1.019930095935706e-8,
+        "dp_clear_lw": 7.658115919184638e-9,
+        "dp_clear_sw": 1.0213511814072262e-8,
+        "sp_lw": 0.000335693359375,
+        "sp_sw": 0.0103759765625,
+        "sp_clear_lw": 0.000335693359375,
+        "sp_clear_sw": 0.010986328125
+      }
+    },
+    "positive_device_tests": {
+      "job": "35623260",
+      "log": "build/omp-flux-35623260.log",
+      "passed": 2,
+      "failed": 0,
+      "coverage": "DP/SP flux helpers, including non-unit allocation bounds and partial ranges; omp_is_initial_device explicitly rejects host fallback."
+    },
+    "limitations": [
+      "Validated the RRTMG McICA ACC configuration and flux helpers, not the full accelerator configuration matrix.",
+      "Build emits nvlink warnings for unused sm_70/sm_75 architectures; cc80 execution succeeds on A100.",
+      "No performance or host-thread concurrency conclusions have been established."
+    ]
   }
 }
