@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "paused_for_cloudy_gpu_numerical_regression",
+  "status": "openacc_matched_sampler_baseline_validated",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -134,7 +134,7 @@
       "backend": "CPU",
       "build_directory": "/etc/ecmwf/ssd/ssd1/ecinteractive/nams-ecinteractive/tmpdirs/nams.33430534/opencode/ecrad-main-gpu-cpu-nvhpc",
       "build_succeeded": true,
-      "tests_passed": 172,
+      "tests_passed": 184,
       "tests_failed": 0,
       "initial_checkpoint_tests_passed": 129,
       "initial_checkpoint_tests_failed": 43,
@@ -143,8 +143,8 @@
       "observations": [
         "The merged fast_adding_ica_lw reused flux_up for effective albedo but read an unwritten albedo buffer at cloud top. Correcting that reference removed the nonphysical McICA fluxes.",
         "Six remaining SPARTACUS failures were unexpected passes caused by imported physical-default changes. Restoring main's defaults and max_cloud_od member restored the original test behavior.",
-        "All 172 tests pass without changing tolerances, reference files or expected-failure settings.",
-        "All saved numerical variables in 104 distinct DP/SP output files agree exactly with the unmodified-main build."
+        "All 184 tests pass, including 12 new CPU McICA ACC execution/driver-comparison tests, without changing existing tolerances, reference files or expected-failure settings.",
+        "All 1718 saved numerical variables in 104 original DP/SP output files agree exactly with the unmodified-main build."
       ],
       "test_logs": "Testing/Temporary/LastTest.log and LastTestsFailed.log in the prototype build directory"
     },
@@ -158,14 +158,14 @@
     "baseline_source": "origin/master-omp at b97c15f",
     "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. No fork tiling topics have been integrated yet.",
     "cpu_layout": "Main CPU RRTMG routines and coefficient initialisation retained; accelerator routines selected separately by CMake.",
-    "gpu_layout_adaptation": "An unvalidated preprocessor access-permutation header adapts accelerator coefficient references to main tables.",
+    "gpu_layout_adaptation": "A preprocessor access-permutation header adapts accelerator coefficient references to main tables; the OpenACC RRTMG smoke case passes matched-sampler CPU/device comparisons in both precisions.",
     "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
     "standalone_driver_batching_implemented": false,
     "known_incomplete_work": [
       "Reconcile pointer-based public containers with accelerator mapping and ownership code.",
       "Consolidate duplicated driver and integration sources after validation; the duplicate GPU NetCDF reader has been removed in favour of main's pointer-aware reader.",
       "Reconcile accelerator build selection with FIELD_API and the Makefile build.",
-      "Validate coefficient access adaptation and accelerator interfaces on device.",
+      "Broaden coefficient access and accelerator interface device coverage beyond the validated OpenACC RRTMG smoke case.",
       "Integrate ACC optimisations, full-pipeline tiling and RAPS coupling fixes with provenance.",
       "Complete cross-compiler, numerical, concurrency, memory and performance checks."
     ]
@@ -215,7 +215,8 @@
       "configuration": "build/acc/gpu-smoke.nam",
       "job_script": "build/gpu-smoke.sbatch",
       "log": "build/gpu-smoke-35598149.log",
-      "numerically_accepted": false,
+      "numerically_accepted": true,
+      "acceptance_scope": "Matched McICA ACC CPU/device comparisons for the six smoke outputs; not a full accelerator configuration matrix.",
       "maximum_net_flux_errors_against_same_driver_main": {
         "dp_lw": 21.926352434621208,
         "dp_sw": 96.38637059148289,
@@ -228,7 +229,8 @@
       },
       "observations": [
         "The three GPU drivers give the same error maxima in each precision.",
-        "The cloudy-sky discrepancy remains a blocking numerical failure; neither its cause nor an inherited-versus-integration origin has been established.",
+        "The cloudy-sky differences against native main McICA are reproduced with CPU McICA ACC: these runs use different cloud-sampling algorithms and are not paired numerical regressions.",
+        "All six GPU outputs pass nccmp against the new CPU McICA ACC net-flux outputs with longwave threshold 0.001 and shortwave threshold 0.1 W/m2, including single precision.",
         "No comparison thresholds or reference files have been relaxed."
       ]
     },
@@ -238,7 +240,8 @@
       "Use ordered per-column band/canopy aggregation without temporary index-array mappings; preserve pointer strides with assumed-shape arguments.",
       "Wait inside aggregation helpers to keep call-local descriptors alive until their asynchronous launches finish; global forced synchronization is not used in the successful smoke job.",
       "Offload the nearest-band shortwave surface-albedo path used by main's configuration; previously that path only populated host scratch.",
-      "Make gang-private scratch explicit on the OpenACC parallel construct in the legacy McICA and direct-aerosol kernels, allowing those units to compile with the diagnostic flags."
+      "Make gang-private scratch explicit on the OpenACC parallel construct in the legacy McICA and direct-aerosol kernels, allowing those units to compile with the diagnostic flags.",
+      "Wait for queue 1 before diagnostic host copies and after pointer-component host updates, so saved radiative properties observe completed preparation."
     ],
     "remaining_build_issues": [
       "Inherited NVHPC inline-library extraction remains unresolved; correctness builds explicitly disable it. No performance conclusion is drawn from these builds.",
@@ -246,10 +249,52 @@
       "OpenMP-target compilation and device validation have not yet run."
     ],
     "cpu_rechecked_after_gpu_changes": {
-      "tests_passed": 172,
+      "tests_passed": 184,
       "tests_failed": 0,
       "distinct_output_files_equal_to_main": 104
     },
-    "next_investigation": "Compare cloud optics, cloud samples/RNG state and solver inputs between main CPU, the GPU prototype and frozen GPU parent references before adding tiling."
+    "sampling_and_driver_audit": {
+      "directory": "build/driver-audit",
+      "gpu_jobs": ["35604239", "35604240", "35606735"],
+      "saved_input_fields_compared": 29,
+      "saved_inputs_equal_at_stored_precision": true,
+      "native_sampler": "radiation_cloud_generator with radiation_random_numbers_mix (ZUFALL-like generator)",
+      "accelerator_sampler": "radiation_cloud_generator_acc with per-g-point MINSTD streams; also executable on CPU",
+      "cpu_acc_vs_native_dp_maximum_net_flux_difference_W_m2": {
+        "lw": 21.926352434621208,
+        "sw": 96.38637059148289
+      },
+      "matched_cpu_acc_vs_gpu_acc_maximum_net_flux_difference_W_m2": {
+        "dp_lw": 7.658059075765777e-9,
+        "dp_sw": 1.0199414646194782e-8,
+        "sp_lw": 0.000396728515625,
+        "sp_sw": 0.01025390625,
+        "sp_clear_lw": 0.00042724609375,
+        "sp_clear_sw": 0.0108642578125
+      },
+      "cross_checks": [
+        "GPU preparation followed by native CPU McICA agrees with native main DP fluxes to approximately 1e-8 W/m2.",
+        "Saved cloud optics differ only by floating-point roundoff.",
+        "The six original smoke outputs independently pass nccmp against the CPU CTest mcica_acc outputs, covering all three drivers and both precisions."
+      ]
+    },
+    "validation_policy": [
+      "Preserve native CPU numerical continuity against pinned main.",
+      "Compare accelerator CPU/device results using the same solver, sampler and controlled seeds; identical seed integers alone do not equate different sampling algorithms.",
+      "Require future ACC/OMP tiling comparisons to preserve sampler streams and traversal semantics, including partial blocks."
+    ],
+    "test_adaptation_provenance": [
+      {
+        "author": "Balthasar Reuter",
+        "commit": "c03c39f1fe78bae833b32a5cd1587e3f74992e53",
+        "contribution": "McICA ACC CPU test coverage and whitespace-safe namelist values; independently adapted here with an argument array."
+      },
+      {
+        "author": "Balthasar Reuter",
+        "commit": "53144cb6869cf75fc272432d510dc87a76a7416d",
+        "contribution": "Exact assignment-key matching to avoid prefix aliasing in change_namelist.sh."
+      }
+    ],
+    "next_investigation": "Establish OpenMP-target compilation and matched-sampler device parity before integrating execution tiling and RAPS coupling changes."
   }
 }

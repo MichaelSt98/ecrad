@@ -501,6 +501,9 @@ contains
                &  rad_prop_base_file_name, '_', istartcol, '-',iendcol,'.nc'
         end if
 #if defined(_OPENACC) || defined(OMPGPU)
+          ! Diagnostics must observe completed preparation, including work on
+          ! queue 1, before copying or writing host arrays.
+          !$ACC WAIT(1)
           !$OMP TARGET UPDATE FROM(od_lw, ssa_lw, g_lw, od_lw_cloud, ssa_lw_cloud, g_lw_cloud, &
           !$OMP             planck_hl, lw_emission, lw_albedo, sw_albedo_direct, sw_albedo_diffuse, &
           !$OMP             incoming_sw, od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
@@ -509,6 +512,7 @@ contains
           !$ACC             incoming_sw, od_sw, ssa_sw, g_sw, od_sw_cloud, ssa_sw_cloud, g_sw_cloud)
           call cloud%update_host()
           call flux%update_host()
+          !$ACC WAIT(1)
 #endif
           call save_radiative_properties(trim(rad_prop_file_name), &
              &  nlev, istartcol, iendcol, &

@@ -17,8 +17,8 @@ OUTFILE=$2
 shift
 shift
 
-SEDLINE=""
-while [ "$1" ]
+SEDARGS=()
+while [ "$#" -gt 0 ]
 do
     if [[ "$1" != *"="* ]]
     then
@@ -27,15 +27,19 @@ do
     fi
     KEY="${1%%=*}"
     VALUE="${1#*=}"
-    if ! grep -q "$KEY" "$INFILE"
+    if ! grep -q "^[[:space:]!]*${KEY}[[:space:]]*=" "$INFILE"
     then
         echo "Error: $KEY not found in $INFILE"
         exit 1
     fi
 
-    SEDLINE="$SEDLINE -e s/^[[:space:]]*${KEY}.*/${KEY}=${VALUE},/"
+    # An argument array preserves spaces in values such as "McICA ACC".
+    # Match an assignment, not similarly prefixed keys such as do_sw_direct.
+    VALUE=${VALUE//\\/\\\\}
+    VALUE=${VALUE//&/\\&}
+    VALUE=${VALUE//|/\\|}
+    SEDARGS+=(-e "s|^[[:space:]!]*${KEY}[[:space:]]*=.*|${KEY}=${VALUE},|")
     shift
 done
 
-echo "sed $SEDLINE \"$INFILE\" > \"$OUTFILE\""
-sed $SEDLINE "$INFILE" > "$OUTFILE"
+sed "${SEDARGS[@]}" "$INFILE" > "$OUTFILE"

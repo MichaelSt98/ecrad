@@ -117,7 +117,7 @@ function( add_ecrad_ifs_test )
             OUTPUT ${CONFIG_NAM}
             COMMAND
                 change_namelist.sh ${_PAR_CONFIG_FILE} ${CONFIG_NAM} ${_PAR_NAMELIST_OPTIONS}
-            DEPENDS ${_PAR_CONFIG_FILE}
+            DEPENDS ${_PAR_CONFIG_FILE} ${PROJECT_SOURCE_DIR}/test/common/change_namelist.sh
         )
         add_custom_target( config_${_PAR_NAME}_${PREC} DEPENDS ${CONFIG_NAM} )
 
@@ -128,7 +128,7 @@ function( add_ecrad_ifs_test )
             COMMAND
                 change_namelist.sh ${CONFIG_NAM} ${CONFIG_NET_NAM}
                     do_save_net_fluxes=true do_write_double_precision=true
-            DEPENDS config_${_PAR_NAME}_${PREC}
+            DEPENDS config_${_PAR_NAME}_${PREC} ${PROJECT_SOURCE_DIR}/test/common/change_namelist.sh
         )
         add_custom_target( config_${_PAR_NAME}_${PREC}_net DEPENDS ${CONFIG_NET_NAM} )
 
@@ -236,6 +236,19 @@ add_ecrad_ifs_test(
     ENABLED ON
     REFERENCE_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ecrad_meridian_default_out_REFERENCE.nc
 )
+
+if( NOT HAVE_GPU )
+    # The accelerator sampler has its own per-g-point random streams. Its
+    # CPU execution is the matched numerical reference for offload builds,
+    # rather than native McICA's different Monte Carlo realization.
+    add_ecrad_ifs_test(
+        NAME mcica_acc
+        NAMELIST_OPTIONS
+            "sw_solver_name=\\\"McICA ACC\\\""
+            "lw_solver_name=\\\"McICA ACC\\\""
+        ENABLED ON
+    )
+endif()
 
 # Turn off aerosols
 add_ecrad_ifs_test(
