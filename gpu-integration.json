@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "cpu_regression_restored_gpu_validation_pending",
+  "status": "paused_for_cloudy_gpu_numerical_regression",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -148,22 +148,22 @@
       ],
       "test_logs": "Testing/Temporary/LastTest.log and LastTestsFailed.log in the prototype build directory"
     },
-    "gpu_builds_run": false,
-    "gpu_device_tests_run": false,
+    "gpu_builds_run": true,
+    "gpu_device_tests_run": true,
     "fortls": "Diagnostics attempted on the four CPU-correction source files as well as earlier prototype files; the launcher returned exit code 1 without diagnostics.",
     "cpu_correction_quick_check": "Two S1 findings flag END IF in the core radiation files; this follows the explicit radiation/CONVENTIONS requirement and surrounding style.",
     "diff_check": "git diff --cached --check reports inherited whitespace issues in imported GPU sources; this checkpoint is not style-clean."
   },
   "prototype_scope": {
     "baseline_source": "origin/master-omp at b97c15f",
-    "history_strategy": "Local merge prototype retains original baseline GPU history; no fork tiling topics have been integrated yet.",
+    "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. No fork tiling topics have been integrated yet.",
     "cpu_layout": "Main CPU RRTMG routines and coefficient initialisation retained; accelerator routines selected separately by CMake.",
     "gpu_layout_adaptation": "An unvalidated preprocessor access-permutation header adapts accelerator coefficient references to main tables.",
     "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
     "standalone_driver_batching_implemented": false,
     "known_incomplete_work": [
       "Reconcile pointer-based public containers with accelerator mapping and ownership code.",
-      "Consolidate duplicated driver and integration sources after validation.",
+      "Consolidate duplicated driver and integration sources after validation; the duplicate GPU NetCDF reader has been removed in favour of main's pointer-aware reader.",
       "Reconcile accelerator build selection with FIELD_API and the Makefile build.",
       "Validate coefficient access adaptation and accelerator interfaces on device.",
       "Integrate ACC optimisations, full-pipeline tiling and RAPS coupling fixes with provenance.",
@@ -175,7 +175,81 @@
       "url": "https://github.com/ecmwf-ifs/ecrad/pull/122",
       "commit": "4c120cef9402209cb2bbe2a401b17b4b61dd584d",
       "relationship": "The gas lacc-forwarding correction is already present via original commit 57a7d3431b4ec02cc6bb74fb6378ea0f231d78ab in the merged OMP baseline.",
-      "follow_up": "Import the positive SP/DP device gas-metadata regression, preserving its provenance; validate on actual GPU hardware."
+      "positive_regression_imported_unchanged": true,
+      "regression_file": "test/ifs/acc_gas_metadata.F90",
+      "regression_blob": "c7d018bb8a031b152d9783622dbf805fad27e05c",
+      "device_validation": "DP and SP pass on A100, initially job 35579117 and again with the flux tests in job 35598149."
     }
+  },
+  "openacc_checkpoint": {
+    "compiler": "NVHPC 24.5",
+    "device": "NVIDIA A100-SXM4-40GB",
+    "build_directory": "/etc/ecmwf/nfs/dh2_perm_a/nams/ecrad-main-gpu/build/acc",
+    "build_options": {
+      "ECRAD_GPU_BACKEND": "ACC",
+      "ENABLE_OMP": "OFF",
+      "ENABLE_FIAT": "OFF",
+      "ENABLE_FIELD_API": "OFF",
+      "ENABLE_SINGLE_PRECISION": "ON",
+      "ENABLE_BITIDENTITY_TESTING": "ON",
+      "BUILD_SHARED_LIBS": "OFF",
+      "ECRAD_Fortran_FLAGS": "-O3 -Mrecursive -gpu=cc80",
+      "ECRAD_ENABLE_NVHPC_INLINE_LIBRARY": "OFF"
+    },
+    "positive_device_tests": {
+      "job": "35598149",
+      "passed": 4,
+      "failed": 0,
+      "coverage": [
+        "PR #122 gas metadata and mixing ratios in DP and SP, with enforced device execution.",
+        "Band/canopy aggregation through pointer components in DP and SP, including non-unit allocation bounds, partial active ranges and untouched inactive columns."
+      ]
+    },
+    "full_radiation_smoke": {
+      "job": "35598149",
+      "processes_completed": 6,
+      "drivers": ["ecrad", "ecrad_ifs", "ecrad_ifs_blocked"],
+      "precisions": ["dp", "sp"],
+      "input": "test/ifs/ecrad_meridian.nc",
+      "blocked_nproma": 15,
+      "configuration": "build/acc/gpu-smoke.nam",
+      "job_script": "build/gpu-smoke.sbatch",
+      "log": "build/gpu-smoke-35598149.log",
+      "numerically_accepted": false,
+      "maximum_net_flux_errors_against_same_driver_main": {
+        "dp_lw": 21.926352434621208,
+        "dp_sw": 96.38637059148289,
+        "dp_clear_lw": 7.658059075765777e-9,
+        "dp_clear_sw": 1.0213625500909984e-8,
+        "sp_lw": 23.352508544921875,
+        "sp_sw": 90.9361572265625,
+        "sp_clear_lw": 0.00042724609375,
+        "sp_clear_sw": 0.0108642578125
+      },
+      "observations": [
+        "The three GPU drivers give the same error maxima in each precision.",
+        "The cloudy-sky discrepancy remains a blocking numerical failure; neither its cause nor an inherited-versus-integration origin has been established.",
+        "No comparison thresholds or reference files have been relaxed."
+      ]
+    },
+    "diagnostic_fixes": [
+      "Use main's pointer-aware NetCDF input reader for CPU and accelerator drivers.",
+      "Build the legacy driver-dependent GPU blocking module in a separate driver-side object library.",
+      "Use ordered per-column band/canopy aggregation without temporary index-array mappings; preserve pointer strides with assumed-shape arguments.",
+      "Wait inside aggregation helpers to keep call-local descriptors alive until their asynchronous launches finish; global forced synchronization is not used in the successful smoke job.",
+      "Offload the nearest-band shortwave surface-albedo path used by main's configuration; previously that path only populated host scratch.",
+      "Make gang-private scratch explicit on the OpenACC parallel construct in the legacy McICA and direct-aerosol kernels, allowing those units to compile with the diagnostic flags."
+    ],
+    "remaining_build_issues": [
+      "Inherited NVHPC inline-library extraction remains unresolved; correctness builds explicitly disable it. No performance conclusion is drawn from these builds.",
+      "A separate O0 diagnostic run stopped at an unmapped cloud-optics scratch array, before the later spectral aggregation stage.",
+      "OpenMP-target compilation and device validation have not yet run."
+    ],
+    "cpu_rechecked_after_gpu_changes": {
+      "tests_passed": 172,
+      "tests_failed": 0,
+      "distinct_output_files_equal_to_main": 104
+    },
+    "next_investigation": "Compare cloud optics, cloud samples/RNG state and solver inputs between main CPU, the GPU prototype and frozen GPU parent references before adding tiling."
   }
 }

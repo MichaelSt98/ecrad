@@ -11,6 +11,25 @@ set( TEST_IFS_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/ecrad_meridian.nc" )
 set( TEST_IFS_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1.nam" )
 set( TEST_ECCKD_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1_ecckd.nam" )
 
+# Positive device regression from PR #122 (4c120ce). The correction itself
+# is already present through the original OMP-baseline commit 57a7d34.
+if( HAVE_GPU AND HAVE_ACC )
+    ecbuild_add_test(
+        TARGET ecrad_${PREC}_acc_gas_metadata
+        SOURCES acc_gas_metadata.F90
+        LIBS ecrad.${PREC} ecrad_base.${PREC}
+    )
+    set_target_properties( ecrad_${PREC}_acc_gas_metadata PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gas-metadata-module" )
+    ecbuild_add_test(
+        TARGET ecrad_${PREC}_acc_flux_ranges
+        SOURCES acc_flux_ranges.F90
+        LIBS ecrad.${PREC} ecrad_base.${PREC}
+    )
+    set_target_properties( ecrad_${PREC}_acc_flux_ranges PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/flux-ranges-module" )
+endif()
+
 if( "${PREC}" STREQUAL "sp" )
     set( TEST_IFS_REFERENCE_LW_THRESHOLD 0.5 )
     set( TEST_IFS_REFERENCE_SW_THRESHOLD 0.5 )

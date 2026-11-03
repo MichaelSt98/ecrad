@@ -524,7 +524,7 @@ contains
         end do
       else
 
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
         call sum_surf_band_omp(istartcol, iendcol, config%n_g_sw, config%n_bands_sw, &
              &  lbound(this%sw_dn_direct_surf_g,2), ubound(this%sw_dn_direct_surf_g,2), &
              &  config%i_band_from_reordered_g_sw, this%sw_dn_direct_surf_g, &
@@ -563,7 +563,7 @@ contains
                  &  + this%sw_dn_direct_surf_clear_band(:,jcol)
           end do
         else
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
           call sum_surf_band_omp(istartcol, iendcol, config%n_g_sw, config%n_bands_sw, &
                &  lbound(this%sw_dn_direct_surf_clear_g,2), ubound(this%sw_dn_direct_surf_clear_g,2), &
                &  config%i_band_from_reordered_g_sw, this%sw_dn_direct_surf_clear_g, &
@@ -610,6 +610,18 @@ contains
         !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 #endif
       else if (config%do_nearest_spectral_sw_albedo) then
+#if defined(OMPGPU) || defined(_OPENACC)
+        call canopy_nearest_gpu(istartcol, iendcol, config%n_g_sw, &
+             &  size(config%i_albedo_from_band_sw), size(this%sw_dn_direct_surf_canopy,1), &
+             &  lbound(this%sw_dn_direct_surf_g,2), ubound(this%sw_dn_direct_surf_g,2), &
+             &  config%i_albedo_from_band_sw, config%i_band_from_reordered_g_sw, &
+             &  this%sw_dn_direct_surf_g, this%sw_dn_direct_surf_canopy)
+        call canopy_nearest_gpu(istartcol, iendcol, config%n_g_sw, &
+             &  size(config%i_albedo_from_band_sw), size(this%sw_dn_diffuse_surf_canopy,1), &
+             &  lbound(this%sw_dn_diffuse_surf_g,2), ubound(this%sw_dn_diffuse_surf_g,2), &
+             &  config%i_albedo_from_band_sw, config%i_band_from_reordered_g_sw, &
+             &  this%sw_dn_diffuse_surf_g, this%sw_dn_diffuse_surf_canopy)
+#else
         !$ACC DATA CREATE(i_albedo_from_reordered_g_sw)
         !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)
         !$ACC LOOP GANG VECTOR
@@ -645,6 +657,7 @@ contains
 #endif
         end if
         !$ACC END DATA
+#endif
       else
         ! More accurate calculations using weights, but requires
         ! this%sw_dn_[direct_]surf_band to be defined, i.e.
@@ -719,7 +732,7 @@ contains
         !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 #endif
       else if (config%do_nearest_spectral_lw_emiss) then
-#if defined (OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
         call canopy_lw_nearest_omp(istartcol, iendcol, config%n_g_lw, &
              &  size(config%i_emiss_from_band_lw), size(this%lw_dn_surf_canopy,1), &
              &  lbound(this%lw_dn_surf_g,2), ubound(this%lw_dn_surf_g,2), &
@@ -862,25 +875,45 @@ contains
     integer,    intent(in)    :: istartcol, iendcol, ng, nband, col_lo, col_hi
     integer,    intent(in)    :: i_band_from_reordered_g(ng)
     ! Whole-array bounds preserve column addresses when processing a subrange.
-    real(jprb), intent(in)    :: dn_direct_g(ng,col_lo:col_hi)
-    real(jprb), intent(in)    :: dn_diffuse_g(ng,col_lo:col_hi)
-    real(jprb), intent(inout) :: dn_direct_band(nband,col_lo:col_hi)
-    real(jprb), intent(inout) :: dn_band(nband,col_lo:col_hi)
+    ! Assumed shape preserves pointer strides without host packing. The
+    ! public flux containers may alias caller-owned arrays.
+    real(jprb), intent(in)    :: dn_direct_g(:,col_lo:)
+    real(jprb), intent(in)    :: dn_diffuse_g(:,col_lo:)
+    real(jprb), intent(inout) :: dn_direct_band(:,col_lo:)
+    real(jprb), intent(inout) :: dn_band(:,col_lo:)
 
-    integer :: jcol, jband
+    integer :: jcol, jband, jg
 
-    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+    ! One independent column per lane keeps the original g-point addition
+    ! order and avoids device array-section descriptors and atomic sums.
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(jband,jg)
+#endif
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1) PRIVATE(jband,jg)
     do jcol = istartcol,iendcol
-      call indexed_sum(dn_direct_g(:,jcol), i_band_from_reordered_g, &
-           &           dn_direct_band(:,jcol))
-      call indexed_sum(dn_diffuse_g(:,jcol), i_band_from_reordered_g, &
-           &           dn_band(:,jcol))
+      !$ACC LOOP SEQ
+      do jband = 1,nband
+        dn_direct_band(jband,jcol) = 0.0_jprb
+        dn_band(jband,jcol) = 0.0_jprb
+      end do
+      !$ACC LOOP SEQ
+      do jg = 1,ng
+        jband = i_band_from_reordered_g(jg)
+        dn_direct_band(jband,jcol) = dn_direct_band(jband,jcol) + dn_direct_g(jg,jcol)
+        dn_band(jband,jcol) = dn_band(jband,jcol) + dn_diffuse_g(jg,jcol)
+      end do
+      !$ACC LOOP SEQ
       do jband = 1,nband
         dn_band(jband,jcol) = dn_band(jband,jcol) + dn_direct_band(jband,jcol)
       end do
     end do
+    !$ACC END PARALLEL LOOP
+#if defined(OMPGPU)
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
+    ! Keep call-local array descriptors alive until this launch completes.
+    !$ACC WAIT(1)
   end subroutine sum_surf_band_omp
 
 
@@ -949,30 +982,48 @@ contains
     integer,    intent(in)  :: istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi
     integer,    intent(in)  :: i_emiss_from_band(nband)
     integer,    intent(in)  :: i_band_from_reordered_g(ng)
-    real(jprb), intent(in)  :: lw_dn_surf_g(ng,col_lo:col_hi)
-    real(jprb), intent(out) :: lw_dn_surf_canopy(ncanopy,col_lo:col_hi)
+    real(jprb), intent(in)  :: lw_dn_surf_g(:,col_lo:)
+    real(jprb), intent(inout) :: lw_dn_surf_canopy(:,col_lo:)
 
-    integer :: jcol, jg
-    integer :: i_emiss_from_reordered_g(ng)
-
-    !$OMP TARGET ENTER DATA MAP(ALLOC: i_emiss_from_reordered_g)
-
-    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
-    do jg = 1,ng
-      i_emiss_from_reordered_g(jg) = i_emiss_from_band(i_band_from_reordered_g(jg))
-    end do
-    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
-
-    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
-    do jcol = istartcol,iendcol
-      call indexed_sum(lw_dn_surf_g(:,jcol), i_emiss_from_reordered_g, &
-           &           lw_dn_surf_canopy(:,jcol))
-    end do
-    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
-
-    !$OMP TARGET EXIT DATA MAP(DELETE: i_emiss_from_reordered_g)
+    call canopy_nearest_gpu(istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi, &
+         &  i_emiss_from_band, i_band_from_reordered_g, lw_dn_surf_g, lw_dn_surf_canopy)
 
   end subroutine canopy_lw_nearest_omp
+
+
+  ! Aggregate directly from g-points to canopy intervals. No temporary index
+  ! array is mapped, so asynchronous work cannot outlive such a mapping.
+  subroutine canopy_nearest_gpu(istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi, &
+       &  i_canopy_from_band, i_band_from_reordered_g, dn_surf_g, dn_surf_canopy)
+
+    integer, intent(in) :: istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi
+    integer, intent(in) :: i_canopy_from_band(nband), i_band_from_reordered_g(ng)
+    real(jprb), intent(in) :: dn_surf_g(:,col_lo:)
+    real(jprb), intent(inout) :: dn_surf_canopy(:,col_lo:)
+    integer :: jcol, jg, jcanopy
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(jg,jcanopy)
+#endif
+    !$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1) PRIVATE(jg,jcanopy)
+    do jcol = istartcol,iendcol
+      !$ACC LOOP SEQ
+      do jcanopy = 1,ncanopy
+        dn_surf_canopy(jcanopy,jcol) = 0.0_jprb
+      end do
+      !$ACC LOOP SEQ
+      do jg = 1,ng
+        jcanopy = i_canopy_from_band(i_band_from_reordered_g(jg))
+        dn_surf_canopy(jcanopy,jcol) = dn_surf_canopy(jcanopy,jcol) + dn_surf_g(jg,jcol)
+      end do
+    end do
+    !$ACC END PARALLEL LOOP
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+
+    !$ACC WAIT(1)
+  end subroutine canopy_nearest_gpu
 
 
   !---------------------------------------------------------------------

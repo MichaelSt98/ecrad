@@ -500,6 +500,52 @@ contains
                &  maxval(config%i_albedo_from_band_sw), ' bands'
           call radiation_abort()
         end if
+#if defined(_OPENACC) || defined(OMPGPU)
+#if defined(OMPGPU)
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+        !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
+        do jcol = istartcol,iendcol
+          do jg = 1,config%n_g_sw
+            sw_albedo_diffuse(jg,jcol) = this%sw_albedo(jcol, &
+                 &  config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw(jg)))
+          end do
+        end do
+        !$ACC END PARALLEL LOOP
+#if defined(OMPGPU)
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+        if (associated(this%sw_albedo_direct)) then
+#if defined(OMPGPU)
+          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+          !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
+          do jcol = istartcol,iendcol
+            do jg = 1,config%n_g_sw
+              sw_albedo_direct(jg,jcol) = this%sw_albedo_direct(jcol, &
+                   &  config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw(jg)))
+            end do
+          end do
+          !$ACC END PARALLEL LOOP
+#if defined(OMPGPU)
+          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+        else
+#if defined(OMPGPU)
+          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+          !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
+          do jcol = istartcol,iendcol
+            do jg = 1,config%n_g_sw
+              sw_albedo_direct(jg,jcol) = sw_albedo_diffuse(jg,jcol)
+            end do
+          end do
+          !$ACC END PARALLEL LOOP
+#if defined(OMPGPU)
+          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+        end if
+#else
         sw_albedo_diffuse = transpose(this%sw_albedo(istartcol:iendcol, &
              &  config%i_albedo_from_band_sw(config%i_band_from_reordered_g_sw)))
         if (associated(this%sw_albedo_direct)) then
@@ -508,6 +554,7 @@ contains
         else
           sw_albedo_direct = sw_albedo_diffuse
         end if
+#endif
       end if
     end if
 

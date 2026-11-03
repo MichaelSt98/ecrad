@@ -1381,10 +1381,10 @@ contains
       !$ACC END PARALLEL
 
       ! Loop over position
-      !$ACC PARALLEL DEFAULT(NONE) &
+      !$ACC PARALLEL DEFAULT(NONE) PRIVATE(od_sw_aerosol, scat_sw_aerosol, scat_g_sw_aerosol) &
       !$ACC   NUM_GANGS(iendcol-istartcol+1) &
       !$ACC   VECTOR_LENGTH(((config%n_g_sw-1)/32+1)*32) ASYNC(1)
-      !$ACC LOOP GANG PRIVATE(od_sw_aerosol, scat_sw_aerosol, scat_g_sw_aerosol)
+      !$ACC LOOP GANG
       do jcol = istartcol,iendcol
 ! Added for DWD (2020)
 !NEC$ forced_collapse
@@ -1494,10 +1494,10 @@ contains
 
         !$ACC WAIT
         ! Loop over position
-        !$ACC PARALLEL DEFAULT(NONE) PRESENT(od_lw) &
+        !$ACC PARALLEL DEFAULT(NONE) PRESENT(od_lw) PRIVATE(od_lw_aerosol) &
         !$ACC   NUM_GANGS(iendcol-istartcol+1) &
         !$ACC   VECTOR_LENGTH(((config%n_g_lw-1)/32+1)*32) ASYNC(1)
-        !$ACC LOOP GANG PRIVATE(od_lw_aerosol)
+        !$ACC LOOP GANG
         do jcol = istartcol,iendcol
           !$ACC LOOP WORKER
 ! Added for DWD (2020)

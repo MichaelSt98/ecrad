@@ -295,11 +295,12 @@ contains
 
     ! Loop through columns
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1) &
-    !$ACC   NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS((config%n_g_sw-1)/32+1) VECTOR_LENGTH(32)
-    !$ACC LOOP GANG PRIVATE(cos_sza, g_total, gamma1, gamma2, gamma3, od_cloud_new, od_scaling, od_total, ref_clear, &
+    !$ACC   NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS((config%n_g_sw-1)/32+1) VECTOR_LENGTH(32) &
+    !$ACC   PRIVATE(cos_sza, g_total, gamma1, gamma2, gamma3, od_cloud_new, od_scaling, od_total, ref_clear, &
     !$ACC   ref_dir, ref_dir_clear, reflectance, ssa_total, tmp_work_inv_denominator, tmp_work_albedo, &
     !$ACC   tmp_work_source, trans_clear, trans_dir_diff, trans_dir_diff_clear, &
     !$ACC   trans_dir_dir, trans_dir_dir_clear, transmittance)
+    !$ACC LOOP GANG
     do jcol = istartcol,iendcol
       ! Only perform calculation if sun above the horizon
       if (single_level%cos_sza(jcol) > 0.0_jprb) then

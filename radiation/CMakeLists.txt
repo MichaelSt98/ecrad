@@ -124,7 +124,8 @@ endif()
 # This requires building an inline lib for Fortran, see
 # https://docs.nvidia.com/hpc-sdk/compilers/hpc-compilers-user-guide/index.html#fn-inline-use
 set( inlib_NAME ecrad.${PREC}.il )
-if( HAVE_GPU AND CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC" )
+option( ECRAD_ENABLE_NVHPC_INLINE_LIBRARY "Extract and use the NVHPC inline library" ON )
+if( HAVE_GPU AND CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC" AND ECRAD_ENABLE_NVHPC_INLINE_LIBRARY )
     set( HAVE_INLIB ON )
 else()
     set( HAVE_INLIB OFF )

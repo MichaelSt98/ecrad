@@ -49,6 +49,11 @@ endmacro()
 
 ecrad_ifs_process_fypp( radintg_zrgp_mod )
 
+if( HAVE_GPU )
+    # The legacy GPU blocking helper also reads standalone driver settings.
+    # Compile it with driver_lib, not the model-facing IFS library.
+    list( REMOVE_ITEM ifs_SOURCES ifs_blocking.F90 )
+endif()
 ecrad_select_gpu_sources( ifs_SOURCES )
 
 ecbuild_add_library(

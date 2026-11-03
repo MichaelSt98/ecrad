@@ -303,11 +303,12 @@ contains
 
     ! Loop through columns
     !$ACC PARALLEL DEFAULT(NONE) ASYNC(1)  &
-    !$ACC   NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS((config%n_g_lw-1)/32+1) VECTOR_LENGTH(32)
-    !$ACC LOOP GANG PRIVATE(g_total, i_cloud_top, od_cloud_new, od_scaling, od_total, ref_clear, &
+    !$ACC   NUM_GANGS(iendcol-istartcol+1) NUM_WORKERS((config%n_g_lw-1)/32+1) VECTOR_LENGTH(32) &
+    !$ACC   PRIVATE(g_total, i_cloud_top, od_cloud_new, od_scaling, od_total, ref_clear, &
     !$ACC   reflectance, tmp_work_inv_denominator, tmp_work_albedo, tmp_work_source, &
     !$ACC   scat_od_total, source_dn, source_dn_clear, source_up, source_up_clear, ssa_total, &
     !$ACC   trans_clear, transmittance)
+    !$ACC LOOP GANG
     do jcol = istartcol,iendcol
 
       ! Clear-sky calculation

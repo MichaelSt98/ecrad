@@ -39,6 +39,18 @@ set_target_properties( driver_lib.${PREC}
         Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/module_driver_lib"
 )
 
+if( HAVE_GPU )
+    ecbuild_add_library(
+        TARGET driver_blocking.${PREC}
+        TYPE OBJECT
+        SOURCES "${PROJECT_SOURCE_DIR}/ifs/ifs_blocking_gpu.F90"
+        PUBLIC_INCLUDES "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/module_driver_blocking>"
+        PRIVATE_LIBS driver_lib.${PREC} ifs.${PREC}
+    )
+    set_target_properties( driver_blocking.${PREC} PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/module_driver_blocking" )
+endif()
+
 ecbuild_add_executable(
     TARGET ecrad_${PREC}
     SOURCES
@@ -63,6 +75,7 @@ ecbuild_add_executable(
     SOURCES
         ${driver_blocked}
     LIBS
+        $<${HAVE_GPU}:driver_blocking.${PREC}>
         ifs.${PREC}
         driver_lib.${PREC}
     LINKER_LANGUAGE Fortran
