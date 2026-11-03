@@ -292,7 +292,7 @@ contains
     !$ACC LOOP WORKER VECTOR
     do jcol = 1,ncol
       flux_up(jcol,i_cloud_top) = source(jcol,i_cloud_top) &
-          &                 + albedo(jcol,i_cloud_top)*flux_dn(jcol,i_cloud_top)
+          &                 + flux_up(jcol,i_cloud_top)*flux_dn(jcol,i_cloud_top)
     end do
     !$ACC LOOP SEQ
     do jlev = i_cloud_top-1,1,-1

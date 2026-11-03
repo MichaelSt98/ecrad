@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "paused_for_cpu_numerical_regression",
+  "status": "cpu_regression_restored_gpu_validation_pending",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -134,19 +134,24 @@
       "backend": "CPU",
       "build_directory": "/etc/ecmwf/ssd/ssd1/ecinteractive/nams-ecinteractive/tmpdirs/nams.33430534/opencode/ecrad-main-gpu-cpu-nvhpc",
       "build_succeeded": true,
-      "tests_passed": 129,
-      "tests_failed": 43,
+      "tests_passed": 172,
+      "tests_failed": 0,
+      "initial_checkpoint_tests_passed": 129,
+      "initial_checkpoint_tests_failed": 43,
+      "distinct_output_files_compared_with_main": 104,
+      "saved_numerical_variables_equal_to_main": true,
       "observations": [
-        "McICA longwave results include nonphysical values and overflow; this is not a tolerance-level difference.",
-        "Failures affect RRTMG and ecCKD McICA configurations and some driver comparisons.",
-        "Tripleclouds, cloudless and several no-aerosol configurations pass.",
-        "Both precisions are affected; the root cause has not been isolated."
+        "The merged fast_adding_ica_lw reused flux_up for effective albedo but read an unwritten albedo buffer at cloud top. Correcting that reference removed the nonphysical McICA fluxes.",
+        "Six remaining SPARTACUS failures were unexpected passes caused by imported physical-default changes. Restoring main's defaults and max_cloud_od member restored the original test behavior.",
+        "All 172 tests pass without changing tolerances, reference files or expected-failure settings.",
+        "All saved numerical variables in 104 distinct DP/SP output files agree exactly with the unmodified-main build."
       ],
       "test_logs": "Testing/Temporary/LastTest.log and LastTestsFailed.log in the prototype build directory"
     },
     "gpu_builds_run": false,
     "gpu_device_tests_run": false,
-    "fortls": "Diagnostics attempted on radiation_thermodynamics.F90 and rrtm_taumol1_gpu.F90; the launcher returned exit code 1 without diagnostics.",
+    "fortls": "Diagnostics attempted on the four CPU-correction source files as well as earlier prototype files; the launcher returned exit code 1 without diagnostics.",
+    "cpu_correction_quick_check": "Two S1 findings flag END IF in the core radiation files; this follows the explicit radiation/CONVENTIONS requirement and surrounding style.",
     "diff_check": "git diff --cached --check reports inherited whitespace issues in imported GPU sources; this checkpoint is not style-clean."
   },
   "prototype_scope": {
@@ -157,7 +162,6 @@
     "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
     "standalone_driver_batching_implemented": false,
     "known_incomplete_work": [
-      "Isolate CPU numerical regression before accepting this merge prototype.",
       "Reconcile pointer-based public containers with accelerator mapping and ownership code.",
       "Consolidate duplicated driver and integration sources after validation.",
       "Reconcile accelerator build selection with FIELD_API and the Makefile build.",
@@ -165,5 +169,13 @@
       "Integrate ACC optimisations, full-pipeline tiling and RAPS coupling fixes with provenance.",
       "Complete cross-compiler, numerical, concurrency, memory and performance checks."
     ]
+  },
+  "related_pull_requests": {
+    "122": {
+      "url": "https://github.com/ecmwf-ifs/ecrad/pull/122",
+      "commit": "4c120cef9402209cb2bbe2a401b17b4b61dd584d",
+      "relationship": "The gas lacc-forwarding correction is already present via original commit 57a7d3431b4ec02cc6bb74fb6378ea0f231d78ab in the merged OMP baseline.",
+      "follow_up": "Import the positive SP/DP device gas-metadata regression, preserving its provenance; validate on actual GPU hardware."
+    }
   }
 }

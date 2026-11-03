@@ -272,9 +272,15 @@ contains
     ! and below the ground, both treated as single-region clear skies
     logical :: is_clear_sky_layer(0:nlev+1)
 
+    real(jprb) :: max_cloud_od
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_spartacus_lw:solver_spartacus_lw',0,hook_handle)
+
+    max_cloud_od = config%max_cloud_od
+    if (config%max_cloud_od_lw >= 0.0_jprb) then
+      max_cloud_od = config%max_cloud_od_lw
+    end if
 
     ! --------------------------------------------------------
     ! Section 1: Prepare general variables and arrays
@@ -568,7 +574,7 @@ contains
 
               ! Apply maximum cloud optical depth for stability in the
               ! 3D case
-              od_region(jg,jreg) = min(od_region(jg,jreg), config%max_cloud_od_lw)
+              od_region(jg,jreg) = min(od_region(jg,jreg), max_cloud_od)
 
             end do
 

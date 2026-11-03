@@ -290,9 +290,15 @@ contains
     ! Maximum entrapment coefficient
     real(jprb) :: max_entr
 
+    real(jprb) :: max_cloud_od
     real(jphook) :: hook_handle
 
     if (lhook) call dr_hook('radiation_spartacus_sw:solver_spartacus_sw',0,hook_handle)
+
+    max_cloud_od = config%max_cloud_od
+    if (config%max_cloud_od_sw >= 0.0_jprb) then
+      max_cloud_od = config%max_cloud_od_sw
+    end if
 
     ! --------------------------------------------------------
     ! Section 1: Prepare general variables and arrays
@@ -646,7 +652,7 @@ contains
 
               ! Apply maximum cloud optical depth for stability in the
               ! 3D case
-              od_region(jg,jreg) = min(od_region(jg,jreg), config%max_cloud_od_sw)
+              od_region(jg,jreg) = min(od_region(jg,jreg), max_cloud_od)
 
             end do
 
@@ -1168,9 +1174,9 @@ end if
               ! scaling down if necessary
               do jg = 1,ng
                 max_entr = -min(entrapment(jg,1,1),entrapment(jg,2,2))
-                if (max_entr > config%max_cloud_od_sw) then
+                if (max_entr > max_cloud_od) then
                   ! Scale down all inputs for this g point
-                  entrapment(jg,:,:) = entrapment(jg,:,:) * (config%max_cloud_od_sw/max_entr)
+                  entrapment(jg,:,:) = entrapment(jg,:,:) * (max_cloud_od/max_entr)
                 end if
               end do
 
@@ -1265,9 +1271,9 @@ end if
               ! scaling down if necessary
               do jg = 1,ng
                 max_entr = -min(entrapment(jg,1,1),entrapment(jg,2,2))
-                if (max_entr > config%max_cloud_od_sw) then
+                if (max_entr > max_cloud_od) then
                   ! Scale down all inputs for this g point
-                  entrapment(jg,:,:) = entrapment(jg,:,:) * (config%max_cloud_od_sw/max_entr)
+                  entrapment(jg,:,:) = entrapment(jg,:,:) * (max_cloud_od/max_entr)
                 end if
               end do
 
