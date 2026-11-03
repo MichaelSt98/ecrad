@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import numpy as np
@@ -60,6 +61,8 @@ def main():
     parser.add_argument("--reference-directory", type=Path)
     parser.add_argument("--drivers", nargs="+", choices=DRIVERS, default=DRIVERS)
     parser.add_argument("--precisions", nargs="+", choices=PRECISIONS, default=PRECISIONS)
+    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[],
+                        help="Also test ECRAD_FULL_BATCH_SIZE in flat GPU drivers")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     build = args.build_directory.resolve()
@@ -69,6 +72,7 @@ def main():
     if reference_dir is not None:
         reference_dir = reference_dir.resolve()
     env = dict(os.environ, OMP_NUM_THREADS="1")
+    env.pop("ECRAD_FULL_BATCH_SIZE", None)
     # Full input has 32 columns. Include singleton, odd, exact and oversized
     # blocks, plus a non-unit active range with a partial final block.
     cases = [(size, repeat, 1, 32) for size in (1, 7, 15, 32, 33)
@@ -87,14 +91,20 @@ def main():
         for driver in args.drivers:
             binary = build / "bin" / f"{driver}_{precision}"
             baseline = output_dir / f"baseline_{driver}_{precision}.nc"
-            runs = [(32, 1, 1, 32, False)]
-            runs += [(size, repeat, first, last, True)
+            runs = [(32, 1, 1, 32, False, 0)]
+            runs += [(size, repeat, first, last, True, 0)
                      for size, repeat, first, last in cases]
-            for size, repeat, first, last, blocked in runs:
+            if driver != "ecrad_ifs_blocked":
+                runs += [(size, 3, first, last, True, batch)
+                         for size in (1, 7, 15) for batch in args.batch_sizes
+                         for first, last in ((1, 32), (5, 29))]
+            for size, repeat, first, last, blocked, batch in runs:
                 if driver == "ecrad_ifs_blocked" and first != 1:
                     continue
                 label = (f"{driver}_{precision}_b{size}_r{repeat}_"
                          f"c{first}-{last}_{'blocks' if blocked else 'baseline'}")
+                if batch:
+                    label += f"_tile{batch}"
                 namelist = output_dir / f"{label}.nam"
                 output = output_dir / f"{label}.nc" if blocked else baseline
                 subprocess.run([
@@ -102,15 +112,31 @@ def main():
                     str(args.namelist.resolve()), str(namelist),
                     f"nblocksize={size}", f"nrepeat={repeat}",
                     f"istartcol={first}", f"iendcol={last}",
-                    f"do_parallel={'true' if blocked else 'false'}",
+                    f"do_parallel={'true' if blocked and not batch else 'false'}",
+                    f"iverbose={3 if batch else 2}",
                 ], check=True)
                 print("Running " + label, flush=True)
-                with (output_dir / f"{label}.log").open("w") as log:
+                run_env = dict(env)
+                if batch:
+                    run_env["ECRAD_FULL_BATCH_SIZE"] = str(batch)
+                log_path = output_dir / f"{label}.log"
+                with log_path.open("w") as log:
                     subprocess.run([
                         str(binary), str(namelist),
                         str(root / "test/ifs/ecrad_meridian.nc"), str(output),
-                    ], cwd=output_dir, env=env, stdout=log,
+                    ], cwd=output_dir, env=run_env, stdout=log,
                         stderr=subprocess.STDOUT, check=True)
+                if batch:
+                    # Observe the actual radiation-call ranges, so a driver
+                    # silently ignoring the batching switch cannot pass.
+                    width = min(32, batch * size)
+                    expected = [(start, min(start + width - 1, last))
+                                for start in range(first, last + 1, width)] * repeat
+                    actual = [(int(a), int(b)) for a, b in re.findall(
+                        r"processing columns (\d+)-(\d+)", log_path.read_text(), re.IGNORECASE
+                    )]
+                    if actual != expected:
+                        raise AssertionError(f"Unexpected tile call ranges in {log_path}: {actual}")
                 # Use existing same-driver thresholds within one backend.
                 # The baseline self-comparison also checks finite outputs.
                 lw = 2e-4 if precision == "sp" else 0.0

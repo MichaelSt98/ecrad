@@ -156,11 +156,11 @@
   },
   "prototype_scope": {
     "baseline_source": "origin/master-omp at b97c15f",
-    "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. No fork tiling topics have been integrated yet.",
+    "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. Flat-driver execution grouping adapts the full-pipeline tile control from both forks; their blocked-layout tiling implementations have not yet been integrated.",
     "cpu_layout": "Main CPU RRTMG routines and coefficient initialisation retained; accelerator routines selected separately by CMake.",
     "gpu_layout_adaptation": "A preprocessor access-permutation header adapts accelerator coefficient references to main tables; the OpenACC RRTMG smoke case passes matched-sampler CPU/device comparisons in both precisions.",
     "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
-    "standalone_driver_batching_implemented": false,
+    "standalone_driver_batching_implemented": true,
     "known_incomplete_work": [
       "Reconcile pointer-based public containers with accelerator mapping and ownership code.",
       "Consolidate duplicated driver and integration sources after validation; the duplicate GPU NetCDF reader has been removed in favour of main's pointer-aware reader.",
@@ -385,6 +385,61 @@
       "Only active columns are compared; values outside the requested driver range are not prescribed.",
       "OMP_NUM_THREADS=1 validates sequential reuse, not host-thread concurrency.",
       "The runner requires BITIDENTITY_TESTING, both precisions, all selected drivers and the controlled McICA ACC namelist."
+    ]
+  },
+  "flat_driver_execution_tiles": {
+    "status": "validated_on_acc_and_omp",
+    "backends": ["ACC", "OMP"],
+    "drivers": ["ecrad", "ecrad_ifs"],
+    "control": "ECRAD_FULL_BATCH_SIZE=K: group K logical nblocksize blocks into one full-pipeline radiation call; unset, empty or zero preserves existing execution.",
+    "implementation": "Flat caller-owned arrays need no gather/scatter buffer. Group contiguous column ranges, cap execution width at the domain, and retain original per-column seeds. An explicit batch request also enables tiled calls when standalone do_parallel=false.",
+    "public_physics_interface_changed": false,
+    "cpu_driver_execution_changed": false,
+    "new_module_global_state": false,
+    "validation": {
+      "runner": "test/ifs/check_gpu_blocking.py --drivers ecrad ecrad_ifs --batch-sizes 1 2 4 64",
+      "job_script": "build/gpu-flat-tiles.sbatch",
+      "jobs": {"ACC": "35640539_0", "OMP": "35640539_1"},
+      "results": "build/flat-tile-audit/{acc,omp}/summary.json",
+      "runs_passed_per_backend": 148,
+      "tiled_runs_per_backend": 96,
+      "logical_block_sizes_for_tiles": [1, 7, 15],
+      "blocks_per_tile": [1, 2, 4, 64],
+      "active_ranges": [[1, 32], [5, 29]],
+      "tiled_repeat_count": 3,
+      "batched_vs_unbatched_maximum_saved_numeric_difference": 0.0,
+      "actual_radiation_call_ranges_checked": true,
+      "standalone_batching_checked_with_do_parallel_false": true,
+      "maximum_cpu_reference_difference_W_m2": {
+        "ACC": 0.0108642578125,
+        "OMP": 0.010986328125
+      },
+      "positive_device_tests_passed": {"ACC": 4, "OMP": 2},
+      "cpu_tests_passed": 184,
+      "cpu_original_outputs_equal_to_main": 104,
+      "cpu_numeric_variables_equal_to_main": 1718,
+      "performance_measured": false,
+      "fortls": "The launcher exits 1 without diagnostics on the three changed driver sources.",
+      "quick_check": "Only S1 findings for END IF spelling, following the existing driver style; explicit integer kinds are used in new declarations."
+    },
+    "source_concepts": [
+      {
+        "author": "Michael Staneker",
+        "commit": "953bebc043754f04c22112d37a439748c1e7d964",
+        "contribution": "OpenACC full-pipeline execution tile with a logical-block-count control and unchanged model storage/seeds."
+      },
+      {
+        "author": "Paul Mullowney",
+        "commit": "c9429450fe62497fc70b9fb60e65c5d9d34fae93",
+        "contribution": "OpenMP-target full-pipeline execution tiles using the same control and retained logical-block seed identity."
+      }
+    ],
+    "next_blocked_layout_work": [
+      "Adapt device-side gather/scatter into bounded caller-owned execution-tile storage for the IFS blocked driver, sharing lifecycle and control across ACC and OMP.",
+      "Preserve block-local seed indices in ordinary builds as well as explicit global seeds in BITIDENTITY_TESTING builds.",
+      "Preserve host pressure metadata reads and padding behavior when radiation_scheme consumes a device-packed tile.",
+      "Keep RAPS offload ownership explicit per caller/configuration rather than importing the module-global config_on_device flag unchanged.",
+      "Measure full-domain execution time and peak memory after blocked-layout correctness is established."
     ]
   }
 }

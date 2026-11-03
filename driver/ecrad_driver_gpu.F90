@@ -30,7 +30,7 @@ program ecrad_driver
   ! --------------------------------------------------------
   ! Section 1: Declarations
   ! --------------------------------------------------------
-  use parkind1,                 only : jprb, jprd ! Working/double precision
+  use parkind1,                 only : jprb, jprd, jpim ! Working/double precision, integer
   use yomhook,                  only : dr_hook_init
 #ifdef HAVE_FIAT
   use mpl_module,               only : mpl_init, mpl_end
@@ -87,6 +87,8 @@ program ecrad_driver
 
   ! For parallel processing of multiple blocks
   integer :: jblock, nblock ! Block loop index and number
+  integer(jpim) :: nexecution ! Columns per full-pipeline execution tile
+  logical :: do_batch
 
   ! Mapping matrix for shortwave spectral diagnostics
   real(jprb), allocatable :: sw_diag_mapping(:,:)
@@ -361,6 +363,11 @@ program ecrad_driver
     write(nulout,'(a)')  'Performing radiative transfer calculations'
   end if
 
+  nexecution = driver_config%execution_blocksize(ncol, do_batch)
+  if (do_batch .and. driver_config%iverbose >= 2) then
+    write(nulout,'(a,i0)') 'Columns per full-pipeline execution tile: ', nexecution
+  end if
+
   ! Option of repeating calculation multiple time for more accurate
   ! profiling
   do jrepeat = 1,driver_config%nrepeat
@@ -371,19 +378,18 @@ program ecrad_driver
     end if
 #endif
 
-    if (driver_config%do_parallel) then
+    if (driver_config%do_parallel .or. do_batch) then
       ! Run radiation scheme over blocks of columns in parallel
 
       ! Compute number of blocks to process
-      nblock = (driver_config%iendcol - driver_config%istartcol &
-           &  + driver_config%nblocksize) / driver_config%nblocksize
+      nblock = 1 + (driver_config%iendcol - driver_config%istartcol) / nexecution
 
       !$OMP PARALLEL DO PRIVATE(istartcol, iendcol) SCHEDULE(RUNTIME)
       do jblock = 1, nblock
         ! Specify the range of columns to process.
-        istartcol = (jblock-1) * driver_config%nblocksize &
+        istartcol = (jblock-1) * nexecution &
              &    + driver_config%istartcol
-        iendcol = min(istartcol + driver_config%nblocksize - 1, &
+        iendcol = min(istartcol + nexecution - 1, &
              &        driver_config%iendcol)
 
         if (driver_config%iverbose >= 3) then

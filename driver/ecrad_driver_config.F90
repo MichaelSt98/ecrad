@@ -14,7 +14,7 @@
 
 module ecrad_driver_config
 
-  use parkind1,                      only : jprb
+  use parkind1,                      only : jprb, jpim
 
   implicit none
 
@@ -134,10 +134,57 @@ module ecrad_driver_config
 
    contains
      procedure :: read => read_config_from_namelist
+     procedure :: execution_blocksize
 
   end type driver_config_type
 
 contains
+
+  !---------------------------------------------------------------------
+  ! Flat GPU drivers can group adjacent logical blocks without packing.
+  ! Match the full-pipeline tile control in the ACC and OMP fork drivers:
+  ! ECRAD_FULL_BATCH_SIZE counts logical blocks, not columns. The caller's
+  ! nblocksize and per-column seeds remain unchanged. No persistent state
+  ! is kept here, so independent callers do not share an execution context.
+  integer(jpim) function execution_blocksize(this, ncol, do_batch) result(nexecution)
+
+    use radiation_io, only : radiation_abort
+
+    class(driver_config_type), intent(in) :: this
+    integer(jpim), intent(in) :: ncol
+    logical, intent(out) :: do_batch
+    character(len=32) :: batch_str
+    integer(jpim) :: istatus, nbatch
+
+    nexecution = this%nblocksize
+    do_batch = .false.
+    call get_environment_variable('ECRAD_FULL_BATCH_SIZE', batch_str, status=istatus)
+    if (istatus == 1) return
+    if (istatus /= 0) then
+      call radiation_abort('Cannot read ECRAD_FULL_BATCH_SIZE')
+    end if
+    if (len_trim(batch_str) == 0) return
+    read(batch_str, *, iostat=istatus) nbatch
+    if (istatus /= 0) then
+      call radiation_abort('ECRAD_FULL_BATCH_SIZE must be a non-negative integer')
+    end if
+    if (nbatch < 0) then
+      call radiation_abort('ECRAD_FULL_BATCH_SIZE must be a non-negative integer')
+    end if
+    if (nbatch == 0) return
+    if (this%nblocksize < 1) then
+      call radiation_abort('Execution tiles require positive nblocksize')
+    end if
+    ! Cap at the domain before multiplying, avoiding overflow for large
+    ! requested batches and allocation of unused padding in a flat driver.
+    if (nbatch > (ncol-1)/this%nblocksize) then
+      nexecution = ncol
+    else
+      nexecution = nbatch*this%nblocksize
+    end if
+    do_batch = .true.
+
+  end function execution_blocksize
 
   !---------------------------------------------------------------------
   ! This subroutine reads configuration data from a namelist file, and
