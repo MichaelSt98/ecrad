@@ -1,0 +1,47 @@
+diff --git a/driver/ecrad_ifs_driver_blocked.F90 b/driver/ecrad_ifs_driver_blocked.F90
+--- a/driver/ecrad_ifs_driver_blocked.F90
++++ b/driver/ecrad_ifs_driver_blocked.F90
+@@ -73,7 +73,9 @@
+   use nvtx
+ #endif
+
++  use iso_fortran_env, only : perf_int => int64
+   implicit none
++  integer(perf_int) :: perf_count(2), perf_rate
+
+ #include "radiation_scheme.intfb.h"
+
+@@ -397,6 +399,9 @@
+   ! Option of repeating calculation multiple time for more accurate
+   ! profiling
+   do jrepeat = 1,driver_config%nrepeat
++    !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(1), perf_rate)
+ #ifdef HAVE_NVTX
+      call nvtxStartRange("ecrad_it")
+ #endif
+@@ -533,6 +538,11 @@
+ #ifdef HAVE_NVTX
+      call nvtxEndRange
+ #endif
++    !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(2))
++    write(nulout,'(a,i0,1x,f16.9)') 'PERF_ITER ', jrepeat, &
++         & real(perf_count(2)-perf_count(1),jprd)/real(perf_rate,jprd)
+
+   end do
+
+diff --git a/radiation/CMakeLists.txt b/radiation/CMakeLists.txt
+--- a/radiation/CMakeLists.txt
++++ b/radiation/CMakeLists.txt
+@@ -114,7 +114,7 @@
+     set( HAVE_INLIB OFF )
+ endif()
+
+-if( HAVE_INLIB )
++if( FALSE ) # Benchmark-only: same no-inline-library mode as integration build.
+
+     # List of source files from which functions should be inlined
+     set( inlib_SOURCES

@@ -317,13 +317,14 @@ IF (ICOUNT/=0) THEN
 
     ENDIF
 
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
     ! IW is zeroed for every sunlit column and then incremented once per
     ! g-point under the same PRMU0 guard, so it holds the identical value in
     ! every column it is ever read in and is just the cumulative g-point
     ! offset. Tracking that offset in a host scalar removes the sequential
     ! dependency that forced JG to stay on the host, which was costing one
     ! kernel launch per g-point, 112 of them per call.
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(2) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
     DO JG=1,IGT
       DO JL = KIDIA, KFDIA
@@ -335,6 +336,7 @@ IF (ICOUNT/=0) THEN
     ENDDO
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+    !$ACC PARALLEL LOOP GANG VECTOR COLLAPSE(3) DEFAULT(PRESENT) ASYNC(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
     DO JG=1,IGT
       DO JK=1,KLEV

@@ -561,6 +561,7 @@ contains
     !$OMP   od_lw_aerosol, scat_lw_aerosol, scat_g_lw_aerosol, factor, irhs)
 #endif
       ! Set variables to zero that may not have been previously
+      !$acc parallel loop gang vector collapse(3) default(present) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol = istartcol,iendcol
          do jlev = 1,nlev
@@ -571,6 +572,7 @@ contains
       end do
 
       if (do_lw_aerosol_scattering) then
+          !$acc parallel loop gang vector collapse(3) default(present) async(1)
          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
          do jcol = istartcol,iendcol
             do jlev = 1,nlev
@@ -583,6 +585,7 @@ contains
          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       end if
 
+      !$acc parallel loop gang vector collapse(2) default(present) private(rh) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(rh)
       do jcol = istartcol,iendcol
          do jlev = istartlev,iendlev
@@ -613,6 +616,7 @@ contains
       ! that the following expressions are array-wise, the
       ! dimension being spectral band.
 
+      !$acc parallel loop gang vector collapse(3) default(present) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol = istartcol,iendcol
          do jlev = istartlev,iendlev
@@ -625,6 +629,8 @@ contains
       enddo
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$acc parallel loop gang vector collapse(3) default(present) async(1) &
+      !$acc& private(itype,mixing_ratio,irh,local_od_sw)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(itype, mixing_ratio, irh, local_od_sw)
       do jcol = istartcol,iendcol
          do jlev = istartlev,iendlev
@@ -671,6 +677,10 @@ contains
       enddo
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      ! Scattering tensors have zero extent in non-scattering configurations.
+      ! Name their actual shapes rather than NVHPC's inferred full-band slice.
+      !$acc parallel loop gang vector collapse(3) default(present) async(1) &
+      !$acc& present(scat_lw_aerosol,scat_g_lw_aerosol)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol = istartcol,iendcol
          do jlev = istartlev,iendlev
@@ -685,6 +695,9 @@ contains
       enddo
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$acc parallel loop gang vector collapse(3) default(present) async(1) &
+      !$acc& private(itype,mixing_ratio,irh,local_od_lw) &
+      !$acc& present(scat_lw_aerosol,scat_g_lw_aerosol)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(itype, mixing_ratio, irh, local_od_lw)
       do jcol = istartcol,iendcol
          do jlev = istartlev,iendlev
@@ -745,6 +758,7 @@ contains
       ! properties (noting that any gas scattering will have an
       ! asymmetry factor of zero)
       if (do_cloud_aerosol_per_sw_g_point) then
+         !$acc parallel loop gang vector collapse(3) default(present) private(local_scat) async(1)
          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(local_scat)
          do jcol = istartcol,iendcol
             ! We can assume the band and g-point indices are the same
@@ -759,6 +773,7 @@ contains
          end do
          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       else
+         !$acc parallel loop gang vector collapse(3) default(present) private(iband,local_od,local_scat) async(1)
          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(iband, local_od, local_scat)
          do jcol = istartcol,iendcol
             do jlev = 1,nlev
@@ -788,6 +803,7 @@ contains
       ! properties, noting that in the longwave, gases do not
       ! scatter at all
       if (do_lw_aerosol_scattering) then
+         !$acc parallel loop gang vector collapse(3) default(present) private(iband,local_od) async(1)
          !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3) PRIVATE(iband, local_od)
          do jcol = istartcol,iendcol
             do jlev = istartlev,iendlev
@@ -810,6 +826,7 @@ contains
          !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       else
          if (do_cloud_aerosol_per_lw_g_point) then
+            !$acc parallel loop gang vector collapse(3) default(present) async(1)
             ! We can assume band and g-point indices are the same
             !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
             do jcol = istartcol,iendcol
@@ -821,6 +838,7 @@ contains
             end do
             !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
          else
+            !$acc parallel loop gang vector collapse(3) default(present) async(1)
             !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
             do jcol = istartcol,iendcol
                do jlev = istartlev,iendlev
@@ -995,7 +1013,7 @@ contains
       call get_gas(gas, IH2O, IMassMixingRatio, h2o_mmr, istartcol=istartcol, lacc=llacc)
 
       ! Loop over column
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
       call add_aerosol_optics_omp_impl(nlev, size(aerosol%mixing_ratio,1), &
            & istartcol, iendcol, istartlev, iendlev, &
            & config%n_g_sw, config%n_g_lw, config%n_g_lw_if_scattering, &

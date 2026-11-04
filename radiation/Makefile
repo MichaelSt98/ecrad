@@ -28,10 +28,20 @@ SOURCES = radiation_aerosol.F90 radiation_config.F90 \
 	radiation_general_cloud_optics_data.F90 radiation_random_numbers.F90 \
 	radiation_aerosol_optics_description.F90
 
+ifneq ($(findstring -acc,$(FCFLAGS)),)
+SOURCES += radiation_mcica_acc_gpoint_lw.F90 radiation_mcica_acc_gpoint_sw.F90
+endif
 OBJECTS := $(SOURCES:.F90=.o)
 LIBRAD = ../lib/libradiation.a
 
 all: $(LIBRAD)
+
+ifneq ($(findstring -acc,$(FCFLAGS)),)
+radiation_mcica_acc_lw.o: radiation_mcica_acc_gpoint_lw.o
+radiation_mcica_acc_sw.o: radiation_mcica_acc_gpoint_sw.o
+radiation_mcica_acc_gpoint_lw.o: radiation_adding_ica_lw.o radiation_cloud_generator_acc.o radiation_flux.o
+radiation_mcica_acc_gpoint_sw.o: radiation_adding_ica_sw.o radiation_cloud_generator_acc.o radiation_flux.o
+endif
 
 $(LIBRAD): $(OBJECTS)
 	ar r $(LIBRAD) $(OBJECTS)

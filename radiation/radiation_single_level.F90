@@ -575,6 +575,12 @@ contains
           call radiation_abort()
         end if
 
+#if defined(_OPENACC) || defined(OMPGPU)
+        call get_lw_albedo_bands_gpu(istartcol, iendcol, config%n_g_lw, &
+             & config%n_bands_lw, nalbedoband, size(this%lw_emissivity,1), &
+             & config%lw_emiss_weights, config%i_band_from_reordered_g_lw, &
+             & this%lw_emissivity, lw_albedo)
+#else
         do jband = 1,config%n_bands_lw
           do jcol = istartcol,iendcol
             lw_albedo_band(jcol,jband) = 0.0_jprb
@@ -596,6 +602,7 @@ contains
 
         lw_albedo = transpose(lw_albedo_band(istartcol:iendcol, &
              &                config%i_band_from_reordered_g_lw))
+#endif
       else
         if (maxval(config%i_emiss_from_band_lw) > size(this%lw_emissivity,2)) then
           write(nulerr,'(a,i0,a)') '*** Error: single_level%lw_emissivity has fewer than required ', &
@@ -635,6 +642,44 @@ contains
     end select
 
   end subroutine get_albedos
+
+
+  ! Weighted LW mapping must be computed on the device, where the emissivity
+  ! inputs and albedo output live. Retain the CPU's emissivity-band sum order
+  ! and form (1-emissivity) before weighting, rather than subtracting a sum.
+  subroutine get_lw_albedo_bands_gpu(istartcol, iendcol, ng, nband, nemiss, ncol, &
+       & weights, i_band_from_g, emissivity, albedo_out)
+    use parkind1, only : jpim
+    integer(jpim), intent(in) :: istartcol, iendcol, ng, nband, nemiss, ncol
+    real(jprb), intent(in) :: weights(nemiss,nband)
+    integer(jpim), intent(in) :: i_band_from_g(ng)
+    real(jprb), intent(in) :: emissivity(ncol,nemiss)
+    real(jprb), intent(out) :: albedo_out(ng,istartcol:iendcol)
+    integer(jpim) :: jcol, jg, jband, jemiss
+    real(jprb) :: albedo
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jband,jemiss,albedo)
+#endif
+    !$acc parallel loop gang vector collapse(2) default(present) async(1) &
+    !$acc& private(jband,jemiss,albedo)
+    do jcol = istartcol, iendcol
+      do jg = 1, ng
+        jband = i_band_from_g(jg)
+        albedo = 0.0_jprb
+        !$acc loop seq
+        do jemiss = 1, nemiss
+          if (weights(jemiss,jband) /= 0.0_jprb) then
+            albedo = albedo + weights(jemiss,jband)*(1.0_jprb-emissivity(jcol,jemiss))
+          endif
+        enddo
+        albedo_out(jg,jcol) = albedo
+      enddo
+    enddo
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+  end subroutine get_lw_albedo_bands_gpu
 
 
   !---------------------------------------------------------------------

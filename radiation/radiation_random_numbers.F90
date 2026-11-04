@@ -46,13 +46,15 @@ module radiation_random_numbers
   implicit none
 
   !$omp declare target(uniform_distribution_omp)
+  !$omp declare target(advance_minstd_integer)
 
 #if defined(__INTEL_COMPILER) || (defined(__NVCOMPILER) && defined(OMPGPU))
   ! This is needed in order for the intel llvm ifx compiler to build this successfully
   public
 #else
   public :: rng_type, IRngMinstdVector, IRngNative, initialize_acc, &
-    &  uniform_distribution_acc, IMinstdA0, IMinstdA, IMinstdM, IMinstdScale, uniform_distribution_omp
+    &  uniform_distribution_acc, IMinstdA0, IMinstdA, IMinstdM, IMinstdScale, uniform_distribution_omp, &
+    &  advance_minstd_integer
 #endif
 
   enum, bind(c)
@@ -351,11 +353,30 @@ contains
   end function uniform_distribution_acc
 
   !---------------------------------------------------------------------
-  ! Populate vector "randnum" with pseudo-random numbers; if rannum is
-  ! of length greater than nmaxstreams (specified when the generator
-  ! was initialized) then only the first nmaxstreams elements will be
-  ! assigned.
+  ! Exact reduction for the scalar accelerator generator. Its state has
+  ! magnitude at most 2**31 (including a rounded SP seed); the product is
+  ! below 2**47. For M=2**31-1, folding the upper bits needs at most one
+  ! subtraction. SIGN preserves Fortran MOD for negative states as well.
+  ! The native CPU rng_type and its floating-state option are unchanged.
+  pure function advance_minstd_integer(istate) result(next_state)
+    !$acc routine seq
+    integer(jpib), intent(in) :: istate
+    integer(jpib) :: next_state, product
+    integer(jpib), parameter :: Modulus = 2147483647_jpib
+
+    product = 48271_jpib * abs(istate)
+    next_state = iand(product,Modulus) + ishft(product,-31)
+    if (next_state >= Modulus) then
+      next_state = next_state - Modulus
+    endif
+    next_state = sign(next_state,istate)
+  end function advance_minstd_integer
+
+
+  ! Scalar uniform deviate using the original floating-point recurrence.
   subroutine uniform_distribution_omp(istate,randnum)
+
+    !$acc routine seq
 
     integer(kind=jpib), intent(inout) :: istate
     real(kind=jprb), intent(out)   :: randnum

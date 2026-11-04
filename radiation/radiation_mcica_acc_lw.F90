@@ -58,6 +58,10 @@ contains
     use radiation_cloud_generator_acc, only: cloud_generator_acc
     use radiation_cloud_cover, only    : beta2alpha, MaxCloudFrac
 
+#ifdef _OPENACC
+    use radiation_mcica_acc_gpoint_lw, only : solver_mcica_acc_gpoint_lw
+#endif
+
 #ifdef HAVE_NVTX
     use nvtx
 #endif
@@ -188,6 +192,17 @@ contains
 #endif
 
     ng = config%n_g_lw
+
+#ifdef _OPENACC
+    call solver_mcica_acc_gpoint_lw(nlev, istartcol, iendcol, config, single_level, cloud, &
+         & od, ssa, g, od_cloud, ssa_cloud, g_cloud, planck_hl, emission, albedo, flux)
+    if (lhook) call dr_hook('radiation_mcica_acc_lw:solver_mcica_acc_lw',1,hook_handle)
+#ifdef HAVE_NVTX
+    !$ACC WAIT(1)
+    call nvtxEndRange
+#endif
+    return
+#endif
 
     !$ACC DATA CREATE(flux_up, flux_dn, flux_up_clear, flux_dn_clear, &
     !$ACC             is_clear_sky_layer, &

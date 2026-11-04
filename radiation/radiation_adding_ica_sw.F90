@@ -19,6 +19,10 @@ module radiation_adding_ica_sw
 
   public
 
+  !$acc routine(adding_ica_sw_omp) seq
+  !$acc routine(adding_ica_sw_recompute_omp) seq
+  !$acc routine(adding_ica_sw_recompute_total_omp) seq
+
   !$omp declare target(adding_ica_sw_omp)
   !$omp declare target(adding_ica_sw_recompute_omp)
   !$omp declare target(adding_ica_sw_recompute_total_omp)

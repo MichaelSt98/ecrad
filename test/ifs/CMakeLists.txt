@@ -8,6 +8,12 @@
 # nor does it submit to any jurisdiction.
 
 set( TEST_IFS_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/ecrad_meridian.nc" )
+
+ecbuild_add_test(
+    TARGET ecrad_${PREC}_minstd_integer
+    SOURCES minstd_integer.F90
+    LIBS ecrad.${PREC} ecrad_base.${PREC}
+)
 set( TEST_IFS_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1.nam" )
 set( TEST_ECCKD_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1_ecckd.nam" )
 

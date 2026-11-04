@@ -54,6 +54,14 @@ module radiation_two_stream
   !$omp declare target(calc_no_scattering_transmittance_lw_omp)
   !$omp declare target(calc_no_scattering_transmittance_lw_single_cell_omp)
 
+  !$acc routine(calc_two_stream_gammas_sw_single_band_omp) seq
+  !$acc routine(calc_reflectance_transmittance_sw_single_band_omp) seq
+  !$acc routine(calc_ref_trans_sw_scalar_omp) seq
+  !$acc routine(calc_ref_trans_sw_single_level_omp) seq
+  !$acc routine(calc_ref_trans_lw_single_level_omp) seq
+  !$acc routine(calc_ref_trans_lw_scalar_omp) seq
+  !$acc routine(calc_no_scattering_transmittance_lw_single_cell_omp) seq
+
 contains
 
   !---------------------------------------------------------------------

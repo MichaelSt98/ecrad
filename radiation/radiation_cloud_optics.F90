@@ -268,7 +268,7 @@ contains
     ! Longwave and shortwave optical depth, scattering optical depth
     ! and asymmetry factor, for liquid and ice in all bands but a
     ! single cloud layer
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
     real(jprb) :: od_lw_liq, scat_od_lw_liq, g_lw_liq, od_lw_ice, scat_od_lw_ice, g_lw_ice
     real(jprb) :: od_sw_liq, scat_od_sw_liq, g_sw_liq, od_sw_ice, scat_od_sw_ice, g_sw_ice
 #else
@@ -320,8 +320,9 @@ contains
 
     associate(ho => config%cloud_optics)
 
-#if defined(OMPGPU)
+#if defined(OMPGPU) || defined(_OPENACC)
       ! Array-wise assignment
+      !$acc parallel loop gang vector collapse(3) default(present) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol=istartcol, iendcol
         do jlev=1, nlev
@@ -334,6 +335,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$acc parallel loop gang vector collapse(3) default(present) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol=istartcol, iendcol
         do jlev=1, nlev
@@ -344,6 +346,7 @@ contains
       end do
       !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
+      !$acc parallel loop gang vector collapse(3) default(present) async(1)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jcol=istartcol, iendcol
         do jlev=1, nlev
@@ -358,6 +361,10 @@ contains
       !
       ! LONGWAVE
       !
+      !$acc parallel loop gang vector collapse(3) default(present) async(1) &
+      !$acc& present(ssa_lw_cloud,g_lw_cloud) &
+      !$acc& private(factor,lwp_in_cloud,iwp_in_cloud,od_lw_liq,scat_od_lw_liq, &
+      !$acc& g_lw_liq,od_lw_ice,scat_od_lw_ice,g_lw_ice)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jlev = 1,nlev
          do jcol = istartcol,iendcol
@@ -449,6 +456,9 @@ contains
       !
       ! SHORTWAVE
       !
+      !$acc parallel loop gang vector collapse(3) default(present) async(1) &
+      !$acc& private(factor,lwp_in_cloud,iwp_in_cloud,od_sw_liq,scat_od_sw_liq, &
+      !$acc& g_sw_liq,od_sw_ice,scat_od_sw_ice,g_sw_ice)
       !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(3)
       do jlev = 1,nlev
          do jcol = istartcol,iendcol

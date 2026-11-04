@@ -773,6 +773,11 @@ contains
         !$ACC DATA CREATE(lw_dn_surf_band) ASYNC(1)
         ! Compute fluxes in each longwave emissivity interval using
         ! weights; first sum over g points to get the values in bands
+#if defined(_OPENACC) || defined(OMPGPU)
+        call sum_surf_lw_band_gpu(istartcol, iendcol, config%n_g_lw, config%n_bands_lw, &
+             & lbound(this%lw_dn_surf_g,2), config%i_band_from_reordered_g_lw, &
+             & this%lw_dn_surf_g, lw_dn_surf_band)
+#else
         if (use_indexed_sum_vec) then
           call indexed_sum_vec(this%lw_dn_surf_g, &
                &               config%i_band_from_reordered_g_lw, &
@@ -794,6 +799,7 @@ contains
           !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 #endif
         end if
+#endif
         nalbedoband = size(config%lw_emiss_weights,1)
 #if defined(OMPGPU)
         !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
@@ -974,8 +980,44 @@ contains
   end subroutine canopy_sw_weights_omp
 
 
-  ! Sum longwave g-point surface fluxes straight onto the canopy
-  ! emissivity intervals
+  ! Sum one column in its original g-point order without constructing device
+  ! array-section descriptors for INDEXED_SUM. Even unused outlined descriptor
+  ! kernels increase the CUDA module's thread-local backing-store requirement.
+  subroutine sum_surf_lw_band_gpu(istartcol, iendcol, ng, nband, col_lo, &
+       & i_band_from_g, dn_g, dn_band)
+    use parkind1, only : jpim
+    integer(jpim), intent(in) :: istartcol, iendcol, ng, nband, col_lo
+    integer(jpim), intent(in) :: i_band_from_g(ng)
+    real(jprb), intent(in) :: dn_g(:,col_lo:)
+    ! Output is the dense local scratch covering only the active columns;
+    ! its lower bound can differ from the caller-owned input container.
+    real(jprb), contiguous, intent(inout) :: dn_band(:,istartcol:)
+    integer(jpim) :: jcol, jband, jg
+
+#if defined(OMPGPU)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(jband,jg)
+#endif
+    !$acc parallel loop gang vector default(present) private(jband,jg) async(1)
+    do jcol = istartcol, iendcol
+      !$acc loop seq
+      do jband = 1, nband
+        dn_band(jband,jcol) = 0.0_jprb
+      enddo
+      !$acc loop seq
+      do jg = 1, ng
+        jband = i_band_from_g(jg)
+        dn_band(jband,jcol) = dn_band(jband,jcol) + dn_g(jg,jcol)
+      enddo
+    enddo
+    !$acc end parallel loop
+#if defined(OMPGPU)
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
+    !$acc wait(1)
+  end subroutine sum_surf_lw_band_gpu
+
+
+  ! Sum longwave g-point surface fluxes straight onto canopy emissivity intervals.
   subroutine canopy_lw_nearest_omp(istartcol, iendcol, ng, nband, ncanopy, col_lo, col_hi, &
        &  i_emiss_from_band, i_band_from_reordered_g, lw_dn_surf_g, lw_dn_surf_canopy)
 

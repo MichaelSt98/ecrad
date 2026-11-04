@@ -1,8 +1,16 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "acc_and_omp_execution_tiles_validated",
+  "status": "gpu_sp_performance_and_memory_optimized_with_small_acc_tiled_gap",
   "integration_branch": "nams-main-gpu",
+  "performance_optimization": {
+    "date": "2026-11-04",
+    "report": "gpu-performance-sp-optimized.json",
+    "acc_omp_time_within_10_percent": true,
+    "memory_comparable_to_valid_bases": true,
+    "cpu_original_outputs_exact_to_main": 104,
+    "residual": "ACC is 5.33% slower than the resident-input tiled fork, narrowly missing the proposed strict 5% target; it is faster than the linked ACC branch and its equivalent-width control."
+  },
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
     "preserve_main_cpu_performance": true,

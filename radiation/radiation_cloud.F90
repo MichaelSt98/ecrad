@@ -964,12 +964,14 @@ contains
 
     nlev = size(this%fraction,2)
 
-#if defined(OMPGPU)
     ! The sum is only live within one (jlev,jcol) iteration, so a private
     ! scalar serves and there is nothing to map. With the level loop outside
     ! the target region this launched one kernel per level, each with only
     ! iendcol-istartcol+1 work items, which left most of the device idle and
     ! cost more in launch overhead than the arithmetic it performed.
+#if defined(OMPGPU) || defined(_OPENACC)
+    !$acc parallel loop gang vector collapse(2) default(present) &
+    !$acc& private(sum_mixing_ratio_col,jh) async(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(sum_mixing_ratio_col, jh)
     do jlev = 1,nlev
       do jcol = istartcol,iendcol

@@ -76,6 +76,12 @@ set( radiation_SOURCES
 
 ecrad_select_gpu_sources( radiation_SOURCES )
 
+if( HAVE_ACC )
+    list( APPEND radiation_SOURCES
+        radiation_mcica_acc_gpoint_lw.F90
+        radiation_mcica_acc_gpoint_sw.F90 )
+endif()
+
 if( BUILD_SHARED_LIBS )
     if( HAVE_GPU )
         ecbuild_warn( "GPU support enabled: Forcing static linking for ecrad.${PREC}" )

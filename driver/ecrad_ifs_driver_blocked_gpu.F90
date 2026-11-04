@@ -145,6 +145,9 @@ program ecrad_ifs_driver
 
   integer(kind=int64) :: count_rate, t(4)
   real(kind=jprd) :: total_dt, kernel_dt
+#ifdef ECRAD_BENCHMARK
+  integer(kind=int64) :: benchmark_start, benchmark_stop
+#endif
 
   ! Loop index
   integer :: jrl, ibeg, iend, il, ib
@@ -152,7 +155,7 @@ program ecrad_ifs_driver
   ! Caller-owned execution scratch; model storage retains logical NPROMA.
   ! Adapted from Michael Staneker's ACC and Paul Mullowney's OMP tiles.
   integer(jpim) :: nexecution, nactive, nblocks, ibfirst, iblast
-  integer(jpim) :: jfield, jcolumn, jblock, icol
+  integer(jpim) :: jfield, jcolumn, jblock, icol, ncopy, ifirst
   real(jprb), allocatable :: full_fields(:,:)
   integer(jpim), allocatable :: full_seed(:)
   logical :: do_batch
@@ -468,6 +471,10 @@ program ecrad_ifs_driver
       ! Run radiation scheme over blocks of columns in parallel
 
     if (do_batch) then
+#ifdef ECRAD_BENCHMARK
+      !$acc wait
+      call system_clock(count=benchmark_start)
+#endif
       call system_clock(count=t(1))
       do jrl = 1, ncol, nexecution
         nactive = min(nexecution, ncol-jrl+1)
@@ -478,8 +485,7 @@ program ecrad_ifs_driver
           write(nulout,'(a,i0,a,i0)') 'Processing columns ', jrl, '-', jrl+nactive-1
         endif
 
-        ! The actual section is contiguous. Map only this bounded run of
-        ! blocks, avoiding both whole-domain residence and strided transfers.
+        ! Map only this bounded contiguous block run; gather on the device.
         call gather_execution_tile(nproma, ifs_config%ifldstot, nblocks, &
              & nexecution, nactive, zrgp(:,:,ibfirst:iblast), full_fields)
         full_seed(:) = 0
@@ -492,8 +498,7 @@ program ecrad_ifs_driver
           ! init_seed_simple restarts at one in each original model block.
           full_seed(icol) = jcolumn
 #endif
-          ! RADIATION_SCHEME reads the first two pressure half-levels on
-          ! the host to determine vertical ordering; other fields stay device-only.
+          ! Vertical ordering is inspected on the host by RADIATION_SCHEME.
           do jfield = ifs_config%iaprs, ifs_config%iaprs+1
             full_fields(icol,jfield) = zrgp(jcolumn,jfield,ibfirst+jblock)
           enddo
@@ -511,16 +516,22 @@ program ecrad_ifs_driver
         !$acc wait(1)
         !$OMP TARGET UPDATE FROM(full_fields(:,ifs_config%ioutbeg:ifs_config%ioutend))
         do jfield = ifs_config%ioutbeg, ifs_config%ioutend
-          do icol = 1, nactive
-            jblock = (icol-1)/nproma
-            jcolumn = mod(icol-1,nproma)+1
-            zrgp(jcolumn,jfield,ibfirst+jblock) = full_fields(icol,jfield)
+          do jblock = 0, nblocks-1
+            ifirst = jblock*nproma
+            ncopy = min(nproma,nactive-ifirst)
+            do jcolumn = 1, ncopy
+              zrgp(jcolumn,jfield,ibfirst+jblock) = full_fields(ifirst+jcolumn,jfield)
+            enddo
           enddo
         enddo
       enddo
       call system_clock(count=t(2))
       total_dt = (t(2)-t(1))/dble(count_rate)
     else
+#ifdef ECRAD_BENCHMARK
+      !$acc wait
+      call system_clock(count=benchmark_start)
+#endif
 #ifndef OMPGPU
       !$OMP PARALLEL DO SCHEDULE(DYNAMIC,1) REDUCTION(+:total_dt,kernel_dt)&
       !$OMP&PRIVATE(JRL,IBEG,IEND,IL,IB,t)
@@ -666,6 +677,12 @@ program ecrad_ifs_driver
       !$OMP END PARALLEL DO
 #endif
     endif
+#ifdef ECRAD_BENCHMARK
+    !$acc wait
+    call system_clock(count=benchmark_stop)
+    write(nulout,'(a,i0,1x,f16.9)') 'PERF_ITER ', jrepeat, &
+         & real(benchmark_stop-benchmark_start,jprd)/real(count_rate,jprd)
+#endif
 !    else
       ! Run radiation scheme serially
 !      if (driver_config%iverbose >= 3) then
@@ -760,8 +777,7 @@ program ecrad_ifs_driver
 
 contains
 
-  ! Map a bounded contiguous source section, gather on device, then release
-  ! the source before radiation scratch is allocated. No module owns mappings.
+  ! Release bounded source staging before allocating radiation scratch.
   subroutine gather_execution_tile(kproma, kfields, kblocks, kcol, kactive, pblocks, pfields)
     use yomhook, only : lhook, dr_hook, jphook
     integer(jpim), intent(in) :: kproma, kfields, kblocks, kcol, kactive

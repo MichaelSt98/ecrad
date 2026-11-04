@@ -70,8 +70,14 @@ program ecrad_ifs_driver
   use radintg_zrgp_mod,         only : radintg_zrgp_type
   use ifs_blocking,             only : ifs_copy_inputs_to_blocked, ifs_copy_fluxes_from_blocked
   use easy_netcdf
+#ifdef ECRAD_BENCHMARK
+  use iso_fortran_env, only : int64
+#endif
 
   implicit none
+#ifdef ECRAD_BENCHMARK
+  integer(int64) :: benchmark_count(2), benchmark_rate
+#endif
 
 #include "radiation_scheme.intfb.h"
 
@@ -391,6 +397,9 @@ program ecrad_ifs_driver
   tstart = omp_get_wtime()
 #endif
   do jrepeat = 1,driver_config%nrepeat
+#ifdef ECRAD_BENCHMARK
+    call system_clock(benchmark_count(1), benchmark_rate)
+#endif
 
 !    if (driver_config%do_parallel) then
       ! Run radiation scheme over blocks of columns in parallel
@@ -471,6 +480,11 @@ program ecrad_ifs_driver
 
 !    end if
 
+#ifdef ECRAD_BENCHMARK
+    call system_clock(benchmark_count(2))
+    write(nulout,'(a,i0,1x,f16.9)') 'PERF_ITER ', jrepeat, &
+         & real(benchmark_count(2)-benchmark_count(1),jprd)/real(benchmark_rate,jprd)
+#endif
   end do
 
 #ifndef NO_OPENMP

@@ -289,6 +289,7 @@ contains
     use parkind1,                 only : jprb, jpib
     use radiation_random_numbers, only : IMinstdA0, IMinstdA, IMinstdM, uniform_distribution_omp
     implicit none
+    !$acc routine seq
 
     ! Inputs
     integer, intent(in)     :: jg    ! index into the g direction
@@ -508,7 +509,7 @@ contains
 
     use parkind1,                 only : jprb, jpib
     use radiation_random_numbers, only : IMinstdA0, IMinstdA, IMinstdM, &
-         &                               uniform_distribution_omp
+         &                               IMinstdScale, advance_minstd_integer
 
     implicit none
 
@@ -537,6 +538,10 @@ contains
     logical    :: do_fill_od_scaling
     integer(kind=jpib) :: istate
 
+    !$acc parallel loop gang vector collapse(2) default(present) async(1) &
+    !$acc& private(jlev, trigger, rand_top, rand_cloud, rand_inhom1, rand_inhom2, &
+    !$acc& overlap_param_inhom, overhang, wfsd, wcdf, cover, itrigger, jcloud, &
+    !$acc& n_layers_to_scale, ifsd, icdf, icol_begin, icol_end, do_fill_od_scaling, istate)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) &
     !$OMP& PRIVATE(jcol, jg, jlev, trigger, rand_top, rand_cloud, &
     !$OMP&         rand_inhom1, rand_inhom2, overlap_param_inhom, overhang, &
@@ -559,8 +564,9 @@ contains
              istate = REAL(ABS(iseed(jcol) + iseed_offset),jprb)
              istate = nint(mod( istate*jg &
                   &  *(1._jprb-0.05_jprb*jg+0.005_jprb*jg**2)*IMinstdA0, IMinstdM))
-             istate = mod(IMinstdA * istate, IMinstdM)
-             call uniform_distribution_omp(istate, rand_top)
+             istate = advance_minstd_integer(istate)
+             istate = advance_minstd_integer(istate)
+             rand_top = IMinstdScale * istate
 
              trigger  = rand_top * cover
              itrigger = icol_end
@@ -574,7 +580,8 @@ contains
              do jlev = itrigger+1, icol_end+1
                 do_fill_od_scaling = .false.
                 if (jlev <= icol_end) then
-                   call uniform_distribution_omp(istate, rand_cloud)
+                   istate = advance_minstd_integer(istate)
+                   rand_cloud = IMinstdScale * istate
                    if (n_layers_to_scale > 0) then
                       if (rand_cloud*frac(jlev-1,jcol) &
                            &  < frac(jlev,jcol) + frac(jlev-1,jcol) &
@@ -598,9 +605,11 @@ contains
                 end if
 
                 if (do_fill_od_scaling) then
-                   call uniform_distribution_omp(istate, rand_inhom1)
+                   istate = advance_minstd_integer(istate)
+                   rand_inhom1 = IMinstdScale * istate
                    do jcloud = max(2,jlev-n_layers_to_scale), jlev-1
-                      call uniform_distribution_omp(istate, rand_inhom2)
+                      istate = advance_minstd_integer(istate)
+                      rand_inhom2 = IMinstdScale * istate
 
                       overlap_param_inhom = overlap_param(jcloud-1,jcol)
                       if ( icol_begin <= jcloud-1 .and. &
@@ -612,7 +621,8 @@ contains
 
                       if ( jcloud > jlev-n_layers_to_scale .and. &
                            & rand_inhom2 >= overlap_param_inhom) then
-                         call uniform_distribution_omp(istate, rand_inhom1)
+                         istate = advance_minstd_integer(istate)
+                         rand_inhom1 = IMinstdScale * istate
                       end if
 
                       wcdf = rand_inhom1 * (sample_ncdf-1) + 1.0_jprb

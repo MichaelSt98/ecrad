@@ -1,0 +1,49 @@
+diff --git a/driver/ecrad_ifs_driver_blocked.F90 b/driver/ecrad_ifs_driver_blocked.F90
+index 3032fcf..458bf07 100644
+--- a/driver/ecrad_ifs_driver_blocked.F90
++++ b/driver/ecrad_ifs_driver_blocked.F90
+@@ -77,7 +77,9 @@ program ecrad_ifs_driver
+   use nvtx
+ #endif
+
++  use iso_fortran_env, only : perf_int => int64
+   implicit none
++  integer(perf_int) :: perf_count(2), perf_rate
+
+ #include "radiation_scheme.intfb.h"
+
+@@ -482,6 +484,9 @@ program ecrad_ifs_driver
+ #endif
+   do jrepeat = 1,driver_config%nrepeat
+     !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(1), perf_rate)
++    !$acc wait
+ #if defined(_OPENACC) && defined(ECRAD_NSYS_CAPTURE_API)
+     if (capture_iteration .and. jrepeat == 2) then
+       capture_status=cuda_profiler_start()
+@@ -745,6 +750,11 @@ program ecrad_ifs_driver
+ #ifdef HAVE_NVTX
+      call nvtxEndRange
+ #endif
++    !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(2))
++    write(nulout,'(a,i0,1x,f16.9)') 'PERF_ITER ', jrepeat, &
++         & real(perf_count(2)-perf_count(1),jprd)/real(perf_rate,jprd)
+
+   end do
+
+diff --git a/radiation/CMakeLists.txt b/radiation/CMakeLists.txt
+index 023d30c..2307b6c 100644
+--- a/radiation/CMakeLists.txt
++++ b/radiation/CMakeLists.txt
+@@ -117,7 +117,7 @@ else()
+     set( HAVE_INLIB OFF )
+ endif()
+
+-if( HAVE_INLIB )
++if( FALSE ) # Benchmark-only: same no-inline-library mode as integration build.
+
+     # List of source files from which functions should be inlined
+     set( inlib_SOURCES

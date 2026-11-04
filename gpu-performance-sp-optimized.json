@@ -1,0 +1,139 @@
+{
+  "assessment": "SP performance and memory optimization of the main/GPU integration",
+  "date": "2026-11-04",
+  "integration_parent_revision": "7bf26b9c3b4b3387209a7bee64645a7d3a42abb7",
+  "implementation": "Production source and reproducible benchmark tools accompanying this report",
+  "initial_assessment": "gpu-performance-sp.json",
+  "scope": "NVHPC 24.5, A100-SXM4-40GB, SP RRTMG/McICA; one 16960-column/137-level workload, logical NPROMA=32 and K=32 tiles. Correctness also covers DP, ordinary inputs and additional physics settings.",
+  "sources": {
+    "main": "54fe9cb77abb63adf7f746f0adee449e73291d79",
+    "master-omp": "b97c15f6be31a5a48c7c76f5437a9d46800e8bee",
+    "acc-tiled": "475b28a9f000cd509f9bec9d9868dae2bc726d72",
+    "omp-tiled": "01f3110738aad100bb9bab8473396f221ef3c242",
+    "linked_acc_opt": "0d7a8092e884ccb8c4d7f60f1cccb461c876ed86",
+    "linked_acc_opt_url": "https://github.com/MichaelSt98/ecrad/tree/nams-1.7.1-acc-opt"
+  },
+  "changes": [
+    "Restore Michael Staneker's scalar g-point ACC McICA solvers, introduced by 52be10c and imported from the 8414ec3 tree shared with the linked ACC branch. Reuse the existing scalar OMP arithmetic helpers through ACC sequential device entry points.",
+    "Enable spectral-parallel ACC Planck output, SW gas assembly, cloud optics and explicit-array aerosol optics, adapting the donor series 16b6356, 8780033, fe5967a and 6f63a09 to the integrated interfaces. Retain native CPU implementations and coefficient layouts.",
+    "Use an exact integer Mersenne reduction in the shared accelerator cloud generator, preserving its random sequence. The native CPU rng_type and floating-state policy are unchanged.",
+    "Replace per-column integer division/remainder in blocked-output scattering with contiguous inner block loops. Keep bounded caller-owned staging and logical NPROMA storage.",
+    "Remove the descriptor-heavy weighted LW aggregation kernel in favor of a bounded scalar-per-column helper, reducing CUDA thread-local backing-store reservation.",
+    "Extended checks exposed host-only weighted LW emissivity mapping; add its device implementation. Explicitly name zero-extent aerosol scattering arrays in ACC PRESENT clauses for no-scattering configurations.",
+    "Add an exact-recurrence test, weighted LW aggregation range checks, extended scientific comparisons, and tracked benchmark build/run/analysis tools with pinned reference instrumentation. Timing is compiled only with ECRAD_BENCHMARK."
+  ],
+  "protocol": {
+    "base_protocol": "gpu-performance-sp.json#/protocol",
+    "precision": "ENABLE_SINGLE_PRECISION=ON, ENABLE_DOUBLE_PRECISION=OFF for every performance build",
+    "flags": "Release -O3 -Mrecursive; GPU -gpu=cc80; inline-library extraction disabled consistently; no -gpu=pinned or fast-math override",
+    "input_sha256": "214b418cccfaac72b2f772eb7a8135ac8e8f8a2719fed96764d6caef51d5cb89",
+    "controlled_inputs": "BITIDENTITY_TESTING=ON: prescribed radii, overlap and seeds; identical physics and diagnostics across each comparison",
+    "allocation": "64 verified physical EPYC 7742 CPU cores/64 OpenMP threads, or two distinct A100 GPUs with 8480 columns and one physics host thread per process",
+    "process_groups": 5,
+    "iterations_per_process": 6,
+    "warmup_iterations_excluded": 1,
+    "statistic": "Median of five group medians, each using five measured iterations. GPU iteration time is the maximum of the two rank times. Order reverses between successive groups.",
+    "timing": "Synchronized radiation iterations include transfers and gather/scatter as implemented, excluding initialization and NetCDF I/O. The ACC tiled fork's resident-field setup is outside its timed region; ownership strategies differ.",
+    "memory": "MiB; maximum across groups of the sum of complete-process peak RSS or sampled NVML peaks. Device sampling every 20 ms includes CUDA context and reservations; sums of rank peaks are not simultaneous node peaks and short transients may be missed.",
+    "device_stack_override": "None in performance runs; sanitizer instrumentation and its ACC stack setting are separate",
+    "pairing": "Timing ratios use cases from the same allocation only. Older data may supply numerical references but are not mixed into paired timing ratios."
+  },
+  "jobs": {
+    "primary": {"id": "36032189", "node": "ac6-301", "elapsed_seconds": 452, "status": "COMPLETED 0:0"},
+    "gpu_confirmation": {"id": "36026071", "node": "ac6-300", "elapsed_seconds": 372, "status": "COMPLETED 0:0"},
+    "linked_acc_pair": {"id": "36043534", "node": "ac6-300", "elapsed_seconds": 228, "status": "COMPLETED 0:0"},
+    "controlled_validation": {"id": "36026074", "node": "ac6-300", "status": "COMPLETED 0:0"},
+    "extended_ordinary_wide_memcheck": {"id": "36020565", "node": "ac6-317", "status": "COMPLETED 0:0"}
+  },
+  "primary_measurements": {
+    "main-cpu": {"seconds": 0.30321, "range_s": [0.302238, 0.303885], "host_MiB": 2963.65234375, "device_MiB": 0},
+    "optimized-cpu": {"seconds": 0.3048, "range_s": [0.3039451, 0.306093], "host_MiB": 2963.93359375, "device_MiB": 0},
+    "optimized-cpu-matched": {"seconds": 0.4181888, "range_s": [0.4176769, 0.419008], "host_MiB": 3035.48046875, "device_MiB": 0},
+    "acc-tiled": {"seconds": 0.2255702, "range_s": [0.2253668, 0.226022], "host_MiB": 1468.18359375, "device_MiB": 6784},
+    "optimized-acc-tiled": {"seconds": 0.237595, "range_s": [0.2375171, 0.2378578], "host_MiB": 1383.3203125, "device_MiB": 5596},
+    "omp-fork-large-block": {"seconds": 0.266799, "range_s": [0.2663049, 0.266825], "host_MiB": 1368.0859375, "device_MiB": 5580},
+    "optimized-omp-tiled": {"seconds": 0.2537511, "range_s": [0.2532461, 0.253833], "host_MiB": 1408.52734375, "device_MiB": 5592},
+    "master-omp": {"seconds": 2.6048689, "range_s": [2.6017661, 2.6107631], "host_MiB": 1333.50390625, "device_MiB": 1016},
+    "optimized-omp": {"seconds": 2.2924869, "range_s": [2.2869229, 2.300354], "host_MiB": 1335.06640625, "device_MiB": 1016},
+    "optimized-acc": {"seconds": 2.0700898, "range_s": [2.0671242, 2.073055], "host_MiB": 1339.6484375, "device_MiB": 1020}
+  },
+  "primary_comparisons": {
+    "native_cpu_vs_main": {"time_percent": 0.52438904, "host_percent": 0.00948998},
+    "acc_tiled_vs_tiled_fork": {"time_percent": 5.33084601, "host_percent": -5.78015458, "device_delta_MiB": -1188, "outputs_exact": true},
+    "omp_tiled_vs_equivalent_width_control": {"time_percent": -4.89053557, "host_percent": 2.95605745, "device_delta_MiB": 12, "outputs_exact": true},
+    "omp_per_block_vs_master_omp": {"time_percent": -11.99223500, "host_percent": 0.11717251, "device_delta_MiB": 0, "outputs_exact": true},
+    "acc_vs_omp_tiled": {"time_percent": -6.36690836, "device_delta_MiB": 4},
+    "acc_vs_omp_per_block": {"time_percent": -9.70112850, "device_delta_MiB": 4}
+  },
+  "linked_acc_pair": {
+    "protocol": "Same SP configuration and five-group statistic, in allocation 36043534. The donor has no packed path: its large-block case uses NPROMA=1024, an equivalent-call-width control rather than logical-NPROMA=32 tiling.",
+    "measurements": {
+      "acc-opt": {"seconds": 2.7507, "range_s": [2.7469368, 2.751637], "host_MiB": 1454.46484375, "device_MiB": 1748},
+      "optimized-acc": {"seconds": 2.0672741, "range_s": [2.0648348, 2.0805769], "host_MiB": 1339.28125, "device_MiB": 1020},
+      "acc-opt-large-block": {"seconds": 0.261517, "range_s": [0.2613202, 0.2616172], "host_MiB": 1502.359375, "device_MiB": 5648},
+      "optimized-acc-tiled": {"seconds": 0.238301, "range_s": [0.2381811, 0.2385071], "host_MiB": 1382.81640625, "device_MiB": 5596}
+    },
+    "per_block": {"time_percent": -24.84552659, "host_percent": -7.91931096, "device_delta_MiB": -728, "outputs_exact": true},
+    "equivalent_width": {"time_percent": -8.87743435, "host_percent": -7.95701553, "device_delta_MiB": -52, "outputs_exact": true}
+  },
+  "target_assessment": {
+    "base_runtime_target_percent_slower": 5,
+    "cpu_and_omp_runtime_target_met": true,
+    "linked_acc_runtime_target_met": true,
+    "acc_tiled_fork_strict_runtime_target_met": false,
+    "acc_tiled_residual": "5.33% slower than the resident-input tiled fork in the primary run; 5.11% in the GPU confirmation. Near parity, but the strict 5% goal is not claimed met. The remaining cause has not been isolated.",
+    "host_and_device_memory_no_more_than_5_percent_above_valid_bases": true,
+    "acc_omp_time_ratio_target": [0.9, 1.1],
+    "acc_omp_target_met_per_block_and_tiled": true
+  },
+  "memory_investigation": {
+    "explicit_cuda_allocations_profile_bytes": {"integrated_omp": 2399059968, "equivalent_width_omp_control": 2399056384, "difference": 3584},
+    "profile_thread_local_reservation_difference_bytes": 49545216,
+    "descriptor_kernel_static_stack_bytes_before": 1056,
+    "interpretation": "The approximately fixed extra 48-54 MiB/GPU was predominantly CUDA thread-local backing store rather than additional live coefficient arrays. Replacing the descriptor-heavy weighted LW aggregation kernel removed 48 MiB/GPU from sampled peaks. G-point solvers separately removed the large ACC private-array overhead.",
+    "evidence": "build/perf-sp/profile-35967409-* and profile-35970781-* (Nsight Systems CUDA allocation/kernel reports); *-resources.log (cuobjdump); unprofiled NVML measurements above"
+  },
+  "correctness": {
+    "cpu_ctest": {"passed": 186, "failed": 0},
+    "native_cpu_original_main_outputs": {"files_exact": 104, "numeric_variables_exact": 1718},
+    "per_backend_acc_and_omp": {"controlled_driver_cases": 210, "extended_physics_cases": 42, "wide_449_column_cases": 42, "ordinary_block_local_seed_cases": 62},
+    "controlled_and_extended_cpu_max_errors": {"lw": 0.000335693359375, "sw": 0.010986328125},
+    "within_backend_saved_numeric_difference": 0,
+    "targeted_ctest_checks": {"acc": 6, "omp": 4, "failed": 0},
+    "memcheck": {"runs": 8, "errors": 0, "coverage": "Ordinary blocked tiles and controlled weighted standalone offset calls, SP/DP, ACC/OMP", "acc_stack_bytes_under_instrumentation_only": 32768},
+    "exact_recurrence_test": "900000 comparisons per precision against the original floating MOD recurrence, including negative states, zero, modulus and rounded-SP seed boundaries",
+    "extended_physics": ["weighted SW/LW surface mapping and offsets", "no LW cloud scattering", "no derivatives (standalone)", "SW delta scaling with gases", "beta overlap", "Slingo liquid optics"],
+    "all_benchmark_process_group_outputs_repeat_exactly": true,
+    "native_cpu_large_benchmark_vs_main": {"lw": 0, "sw": 0.0000457763671875, "all_numeric_exact": false},
+    "large_benchmark_gpu_vs_matched_cpu": {"lw": 0.003814697265625, "sw": 0.008834362030029297, "lw_threshold": 0.001, "sw_threshold": 0.1, "lw_threshold_met": false},
+    "large_benchmark_limitation": "The larger-input LW CPU/device tolerance miss persists in the valid donor/control outputs too. GPU/base comparisons above are exact; no full-domain CPU/device correctness claim or tolerance relaxation is made.",
+    "nighttime_sw_cloud_cover": "ACC g-point solvers adopt the donor/OMP zero-at-night diagnostic convention; native CPU behavior is unchanged.",
+    "coverage_limits": ["No host-thread/configuration interleaving test", "Blocked IFS driver still ignores istartcol/iendcol", "No-derivatives IFS cases require consistent LAPPROXLWUPDATE configuration; standalone is tested", "Not full solver/ecCKD/FIELD_API/Makefile or scaling coverage"]
+  },
+  "checks": {
+    "existing_file_added_line_quick_check_findings": 0,
+    "imported_file_quick_check_findings": "124: 123 END DO/END IF style findings following radiation/CONVENTIONS, and one continued-declaration false positive; imported arithmetic is not reformatted to satisfy that limited checker",
+    "fortls": "Attempted on all changed Fortran files; launcher exits 1 without diagnostics",
+    "python_syntax_and_shell_syntax": "Passed",
+    "diff_check": "Passed"
+  },
+  "reproduction": {
+    "environment": "module load cmake ninja prgenv/nvidia nvidia/24.5 netcdf4 python3",
+    "build": "python3 test/ifs/benchmark_gpu_build.py",
+    "prepare": "python3 test/ifs/benchmark_gpu.py prepare INPUT.nc test/ifs/benchmark_gpu.nam",
+    "primary": "sbatch test/ifs/benchmark_gpu.sbatch",
+    "linked_acc_pair": "sbatch test/ifs/benchmark_gpu.sbatch acc-opt optimized-acc acc-opt-large-block optimized-acc-tiled",
+    "analyse_primary": "python3 test/ifs/benchmark_gpu_analyse.py JOB_ID",
+    "analyse_supplement": "python3 test/ifs/benchmark_gpu_analyse.py ACC_PAIR_JOB_ID PRIMARY_JOB_ID",
+    "raw_root": "build/perf-sp",
+    "primary_analysis": "build/perf-sp/results/36032189/assessment.json",
+    "supplement_analysis": "build/perf-sp/results/36043534/assessment.json",
+    "validation_summaries": "build/perf-sp/{validation-36026074,extended-36020565,wide-36020565,normal-36020565}-{acc,omp}/summary.json",
+    "raw_evidence": "results/JOB/LABEL-gGROUP-rRANK/{config.nam,result.json,metadata.json,run.log,rss.txt,gpu-memory.json,output.nc}; compile_commands.json and build logs in build/perf-sp"
+  },
+  "rejected_trials": [
+    "Host-only input packing, including a cache-blocked transpose, was slower; retain bounded device gathering.",
+    "64-lane ACC solver launches and asynchronous gather upload did not improve the target workload; retain 128-lane solver launches and the original synchronous staging contract.",
+    "Driver-only -gpu=pinned caused cross-allocation invalid frees and did not provide a worthwhile ACC improvement. The compiler option and production CMake change were removed; trial 35995533 is excluded."
+  ]
+}
