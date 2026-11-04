@@ -112,7 +112,7 @@
     "physics_changes_made": true,
     "builds_run": true,
     "numerical_tests_run": true,
-    "performance_tests_run": false,
+    "performance_tests_run": true,
     "compiler": "NVHPC nvfortran 24.5-1",
     "configuration": {
       "CMAKE_BUILD_TYPE": "Release",
@@ -440,6 +440,18 @@
       "Measure full-domain execution time and peak memory after blocked-layout correctness is established."
     ]
   },
+  "initial_sp_performance_assessment": {
+    "results": "gpu-performance-sp.json",
+    "integration_revision": "1c0011e692200f2ac5e895b01c12736da6f91ae0",
+    "primary_job": "35926250",
+    "omp_control_job": "35937185",
+    "precision": "SP only",
+    "resource_share": "Half node: 64 physical EPYC cores or two A100 GPUs",
+    "input": "16960 columns, 137 levels",
+    "headline": "Default CPU/ACC/OMP times broadly retained; ACC tiled path 2.80x slower than the tiled fork. OMP integration is 11.65% slower than a valid equivalent-width large-block fork control; the fork's own packed path produces invalid near-zero fluxes and is excluded.",
+    "memory": "Host RSS broadly stable. ACC sampled device peak rises by 226 MiB/GPU in both compared execution modes; OMP rises by 48 MiB/GPU untiled and 54 MiB/GPU versus the equivalent-width control.",
+    "numerical_followup": "On this larger input, current matched-sampler CPU/device LW differences reach about 0.0038 W/m2, exceeding the small-case 0.001 W/m2 threshold. Detailed errors and invalid baseline exclusions are recorded in the assessment."
+  },
   "blocked_driver_execution_tiles": {
     "date": "2026-11-04",
     "status": "validated_on_acc_and_omp",
@@ -529,14 +541,15 @@
       "quick_check_findings": 0,
       "diff_check_clean": true,
       "fortls": "Attempted on both changed Fortran drivers and radiation_scheme_gpu; launcher exits 1 without diagnostics.",
-      "performance_measured": false
+      "performance_measured": true,
+      "performance_assessment": "gpu-performance-sp.json"
     },
     "limitations": [
       "Only the controlled RRTMG/McICA ACC configuration and its ordinary cloud-radius/overlap counterpart were tested; this is not full solver/configuration coverage.",
       "The blocked driver continues to process the full input domain and ignore istartcol/iendcol.",
       "Host-thread concurrency and caller/configuration interleaving are not validated.",
       "Execution tiles require COPY_ASYNC disabled.",
-      "Full-domain timing and peak-memory benchmarking, explicit caller-owned offload lifecycles, and deferred solver contexts remain follow-up work."
+      "The initial SP half-node assessment covers one full input and one tile setting. Broader scaling, explicit caller-owned offload lifecycles and deferred solver contexts remain follow-up work."
     ]
   }
 }

@@ -1,0 +1,106 @@
+{
+  "assessment": "Initial SP half-node performance and memory assessment",
+  "date": "2026-11-04",
+  "integration_revision": "1c0011e692200f2ac5e895b01c12736da6f91ae0",
+  "scope": "One workload, one logical block size, one tile setting, two reversed process groups. No tuning or production-code changes.",
+  "sources": {
+    "main": "54fe9cb77abb63adf7f746f0adee449e73291d79",
+    "master-acc": "0614ad1221c579e382872ce6a409fffff5acf8cd",
+    "master-omp": "b97c15f6be31a5a48c7c76f5437a9d46800e8bee",
+    "acc-tiled": "475b28a9f000cd509f9bec9d9868dae2bc726d72",
+    "omp-tiled": "01f3110738aad100bb9bab8473396f221ef3c242"
+  },
+  "protocol": {
+    "precision": "single only; ENABLE_DOUBLE_PRECISION=OFF in all eight builds",
+    "compiler": "NVHPC 24.5",
+    "build": "Release, -O3 -Mrecursive; GPU builds additionally -gpu=cc80; static libraries, FIAT/FIELD_API/NVTX/ROCTX off",
+    "inline_library": "Disabled consistently, including benchmark-only CMake changes in older sources. Compiler automatic inlining remains enabled. No build uses -Mextract or -Minline=lib.",
+    "input": "rad4NN_inputs_2020010100_0c0.nc",
+    "input_sha256": "214b418cccfaac72b2f772eb7a8135ac8e8f8a2719fed96764d6caef51d5cb89",
+    "columns": 16960,
+    "levels": 137,
+    "driver": "ecrad_ifs_blocked_sp",
+    "controlled_inputs": "ENABLE_BITIDENTITY_TESTING=ON; prescribed input radii, overlap and seeds",
+    "physics": "Common RRTMG/McICA configuration from ci-debug/benchmark-nvhpc/config.nam; common data directory, aerosols, clear sky, LW derivatives and spectral diagnostics. Native McICA for the main/current CPU pair; McICA ACC for GPU comparisons and the additional matched CPU control.",
+    "logical_nproma": 32,
+    "tile_blocks": 32,
+    "tile_width_columns": 1024,
+    "cpu_allocation": "64 verified physical AMD EPYC 7742 cores, 64 OpenMP threads; half of a 128-physical-core node",
+    "gpu_allocation": "Two distinct NVIDIA A100-SXM4-40GB GPUs; independent processes each receive 8480 contiguous input columns and 32 physical host cores, with one physics host thread per process",
+    "affinity": "srun --cpu-bind=cores; explicit per-task GPU binding; physical-core counts and distinct active GPU UUIDs asserted",
+    "process_groups": 2,
+    "iteration_count_per_process": 4,
+    "warmup_iterations_excluded": 1,
+    "statistic": "Median of the two process-group medians. Each group median uses three post-warmup iterations; GPU iteration time is the maximum of the two rank times.",
+    "timed_region": "Synchronized full radiation iteration, including per-iteration transfers/gather/scatter as implemented. Excludes setup, initial blocking, NetCDF I/O and process launch. Resident-field setup in the ACC tiled fork is outside the timed region; it is not the same ownership/transfer strategy as the bounded integration path.",
+    "host_memory": "GNU time maximum RSS over each complete process lifetime; report maximum across groups of the sum of rank peaks, not a simultaneous whole-node peak",
+    "gpu_memory": "NVML per-process device-memory samples every 20 ms over the complete process lifetime, including CUDA context; report maximum across groups of the sum of rank peaks. Transient sub-20-ms peaks can be missed.",
+    "device_stack_override": "None in performance runs; no sanitizer instrumentation"
+  },
+  "jobs": {
+    "primary": {"id": "35926250", "node": "ac6-300", "elapsed_seconds": 282, "status": "COMPLETED 0:0"},
+    "omp_fallback_probe": {"id": "35935236", "node": "ac6-301", "elapsed_seconds": 19, "status": "COMPLETED 0:0"},
+    "omp_same_node_pair": {"id": "35937185", "node": "ac6-301", "elapsed_seconds": 27, "status": "COMPLETED 0:0"},
+    "discarded_pilot": "35923948: main's namelist did not accept nwarmup and Slurm inherited an incorrect GPU-per-task binding. Cancelled, harness corrected, and all primary cases rerun. No pilot timing is used."
+  },
+  "measurements": {
+    "main-cpu": {"seconds": 0.3026141, "process_median_range_s": [0.3022442, 0.3029840], "host_peak_sum_MiB": 2963.0390625, "gpu_peak_sum_MiB": 0},
+    "current-cpu": {"seconds": 0.30639995, "process_median_range_s": [0.3051560, 0.3076439], "host_peak_sum_MiB": 2962.921875, "gpu_peak_sum_MiB": 0},
+    "current-cpu-matched": {"seconds": 0.419189, "process_median_range_s": [0.4187410, 0.4196370], "host_peak_sum_MiB": 3028.5078125, "gpu_peak_sum_MiB": 0},
+    "master-acc": {"seconds": 6.02410005, "process_median_range_s": [6.0229890, 6.0252111], "host_peak_sum_MiB": 1342.00390625, "gpu_peak_sum_MiB": 1424},
+    "current-acc": {"seconds": 5.92332855, "process_median_range_s": [5.9226692, 5.9239879], "host_peak_sum_MiB": 1344.59375, "gpu_peak_sum_MiB": 1876},
+    "acc-tiled": {"seconds": 0.2267661, "process_median_range_s": [0.2266071, 0.2269251], "host_peak_sum_MiB": 1466.5, "gpu_peak_sum_MiB": 6784},
+    "current-acc-tiled": {"seconds": 0.63592205, "process_median_range_s": [0.6353640, 0.6364801], "host_peak_sum_MiB": 1419.35546875, "gpu_peak_sum_MiB": 7236},
+    "master-omp": {"seconds": 2.5975859, "process_median_range_s": [2.5952759, 2.5998959], "host_peak_sum_MiB": 1333.171875, "gpu_peak_sum_MiB": 1016},
+    "current-omp": {"seconds": 2.584829, "process_median_range_s": [2.5821619, 2.5874961], "host_peak_sum_MiB": 1338.7421875, "gpu_peak_sum_MiB": 1112},
+    "omp-tiled-invalid": {"seconds": 0.09744045, "process_median_range_s": [0.0927410, 0.1021399], "host_peak_sum_MiB": 1379.8671875, "gpu_peak_sum_MiB": 6020, "usable_performance_reference": false},
+    "omp-fork-large-block": {"seconds": 0.26672465, "process_median_range_s": [0.2665041, 0.2669452], "host_peak_sum_MiB": 1366.66796875, "gpu_peak_sum_MiB": 5580, "job": "35937185", "execution": "OMP tiled-fork revision, batching disabled, NPROMA=1024; working equivalent-call-width control, not a logical-NPROMA=32 tiled baseline"},
+    "current-omp-tiled": {"seconds": 0.29780855, "process_median_range_s": [0.2976961, 0.2979210], "host_peak_sum_MiB": 1410.69140625, "gpu_peak_sum_MiB": 5688, "job": "35937185"}
+  },
+  "comparisons": {
+    "cpu_vs_main": {"time_change_percent": 1.25104878, "host_peak_change_percent": -0.00395498, "interpretation": "Small observed timing increase, no material host-memory change in this initial sample"},
+    "acc_untiled_vs_master_acc": {"time_change_percent": -1.67280588, "host_peak_change_percent": 0.19298332, "gpu_peak_change_MiB": 452, "gpu_peak_change_percent": 31.74157303, "interpretation": "No timing degradation observed, but baseline fluxes differ materially; timing context rather than validated equal-output speedup"},
+    "omp_untiled_vs_master_omp": {"time_change_percent": -0.49110599, "host_peak_change_percent": 0.41782403, "gpu_peak_change_MiB": 96, "gpu_peak_change_percent": 9.44881890, "paired_outputs_exact": true},
+    "acc_tiled_vs_acc_fork": {"time_ratio": 2.80430827, "time_change_percent": 180.43082718, "host_peak_change_percent": -3.21476517, "gpu_peak_change_MiB": 452, "gpu_peak_change_percent": 6.66273585, "paired_max_lw_difference_W_m2": 0.00042724609375, "paired_max_sw_difference_W_m2": 0.00006103515625, "interpretation": "Clear end-to-end tiled-path regression versus the fork; transfer/ownership strategies and remaining optimizations differ. Initial data do not isolate the cause."},
+    "omp_tiled_vs_equivalent_width_fork_control": {"time_ratio": 1.11653928, "time_change_percent": 11.65392850, "host_peak_change_percent": 3.22122407, "gpu_peak_change_MiB": 108, "gpu_peak_change_percent": 1.93548387, "paired_outputs_exact": true, "interpretation": "Modest gap to a valid 1024-column-call control on the same node; includes packing/orchestration differences and is not a valid comparison against the fork's broken tiled path"}
+  },
+  "numerical_observations": {
+    "all_outputs_finite": true,
+    "all_within_version_process_outputs_repeat_exactly": true,
+    "current_native_cpu_vs_main": {"max_lw_W_m2": 0, "max_sw_W_m2": 0.0000457763671875, "all_numeric_exact": false},
+    "current_acc_vs_matched_cpu": {"max_lw_W_m2": 0.003753662109375, "max_sw_W_m2": 0.008835315704345703},
+    "current_omp_vs_matched_cpu": {"max_lw_W_m2": 0.003814697265625, "max_sw_W_m2": 0.008834362030029297},
+    "wide_input_cpu_tolerance": "The GPU/CPU LW difference exceeds the small-regression-case threshold of 0.001 W/m2 on this larger input; SW passes 0.1 W/m2. This performance assessment does not establish full-domain CPU/device correctness.",
+    "master_acc_vs_matched_cpu": {"max_lw_W_m2": 4.01171875, "max_sw_W_m2": 2.4433326721191406},
+    "omp_tiled_fork_rejection": "The K=32 tiled fork produced near-zero LW and zero TOA SW fluxes: maximum errors against matched CPU about 352.7962 W/m2 LW and 113.5916 W/m2 SW. Its 0.09744 s result is excluded from valid speedup/degradation conclusions. The same revision's NPROMA=1024 per-block fallback matches the integration's tiled outputs exactly."
+  },
+  "artifacts": {
+    "root": "build/perf-sp",
+    "build_commands": "module load cmake ninja prgenv/nvidia nvidia/24.5 netcdf4 python3; python3 build/perf-sp/build.py",
+    "primary_command": "sbatch build/perf-sp/run.sbatch",
+    "omp_pair_command": "sbatch build/perf-sp/run.sbatch omp-fork-large-block current-omp-tiled",
+    "analysis_command": "build/acc/test/common/nccmp_venv/bin/python build/perf-sp/analyse.py 35937185 35926250",
+    "combined_analysis": "build/perf-sp/results/35937185/assessment.json",
+    "raw_evidence": "results/<job>/<label>-g<group>-r<rank>/{result.json,metadata.json,run.log,rss.txt,gpu-memory.json,output.nc}",
+    "build_evidence": "<label>-{configure.log,build.log,flags.json}; builds/<label>/compile_commands.json",
+    "source_patch_sha256": {
+      "acc-tiled-benchmark.patch": "364b9d08582d8ee2f8d27659993577b02b4fe7cf04bdb89545e92dbb507d119b",
+      "current-benchmark.patch": "4507c1b3df41989fc40af5a22b15a4198bc873ad8d82cbbaa126151507468e7e",
+      "main-benchmark.patch": "efeafeba99ce0fea09b6549d2c8d15ae8328a652a6fb0effe16cf878e461538d",
+      "master-acc-benchmark.patch": "1d81da3fcd3d60b2255a8f63b5ae2a555cb6965f07128950306a451945241a73",
+      "master-omp-benchmark.patch": "0067db3ca77adef71b55f567e826b0155b724a5a953b1af6da1d8ac2511f0395",
+      "omp-tiled-benchmark.patch": "84431fc86341e547a7c82c154dcc2fe17720eb9952fdaf58d26f2e614040df56"
+    }
+  },
+  "follow_up_priorities": [
+    "Explain the ACC tiled-path gap and the approximately fixed additional 226 MiB device peak per GPU before making broader performance claims.",
+    "Investigate the upstream OMP fork's broken packed-input path separately; do not use its fast near-zero-flux run as a baseline.",
+    "Investigate the larger-input LW CPU/device discrepancy with matched sampling and unchanged tolerances."
+  ],
+  "checks": {
+    "benchmark_patch_quick_check_findings": 0,
+    "benchmark_patch_diff_checks_clean": true,
+    "fortls": "Attempted on all seven modified benchmark Fortran source files; launcher exits 1 without diagnostics.",
+    "production_fortran_changed": false
+  }
+}
