@@ -47,13 +47,13 @@ program ecrad_ifs_driver
   ! --------------------------------------------------------
   ! Section 1: Declarations
   ! --------------------------------------------------------
-  use parkind1,                 only : jprb, jprd ! Working/double precision
+  use parkind1,                 only : jprb, jprd, jpim ! Working/double precision, integer
   use yomhook,                  only : dr_hook_init
 #ifdef HAVE_FIAT
   use mpl_module,               only : mpl_init, mpl_end
 #endif
 
-  use radiation_io,             only : nulout
+  use radiation_io,             only : nulout, radiation_abort
   use radiation_single_level,   only : single_level_type
   use radiation_thermodynamics, only : thermodynamics_type
   use radiation_gas,            only : gas_type, IMassMixingRatio, &
@@ -148,6 +148,14 @@ program ecrad_ifs_driver
 
   ! Loop index
   integer :: jrl, ibeg, iend, il, ib
+
+  ! Caller-owned execution scratch; model storage retains logical NPROMA.
+  ! Adapted from Michael Staneker's ACC and Paul Mullowney's OMP tiles.
+  integer(jpim) :: nexecution, nactive, nblocks, ibfirst, iblast
+  integer(jpim) :: jfield, jcolumn, jblock, icol
+  real(jprb), allocatable :: full_fields(:,:)
+  integer(jpim), allocatable :: full_seed(:)
+  logical :: do_batch
 
   ! If enabled, COPY_ASYNC stages copy in, compute and copy out of ZRGP
   ! in different streams, overlapping the copy-in of the next block with the
@@ -366,6 +374,9 @@ program ecrad_ifs_driver
   allocate(ccn_land(ncol))
   allocate(ccn_sea(ncol))
   allocate(land_frac(ncol))
+  ! Offline inputs do not supply a land mask. Define the ocean default
+  ! rather than letting heap contents select cloud-droplet properties.
+  land_frac(:) = 0.0_jprb
   allocate(pressure_fl(ncol,nlev))
   allocate(temperature_fl(ncol,nlev))
   allocate(flux_sw_direct_normal(ncol))
@@ -402,6 +413,20 @@ program ecrad_ifs_driver
   if (driver_config%iverbose >= 2) then
     write(nulout,'(a)')  'Performing radiative transfer calculations'
   end if
+
+  nexecution = driver_config%execution_blocksize(ncol, do_batch)
+#ifdef COPY_ASYNC
+  if (do_batch) call radiation_abort('Execution tiles require COPY_ASYNC disabled')
+#endif
+  if (do_batch) then
+    allocate(full_fields(nexecution,ifs_config%ifldstot), full_seed(nexecution))
+    full_fields(:,:) = 0.0_jprb
+    !$acc enter data create(full_fields, full_seed)
+    !$OMP TARGET ENTER DATA MAP(ALLOC:full_fields, full_seed)
+    if (driver_config%iverbose >= 2) then
+      write(nulout,'(a,i0)') 'Columns per full-pipeline execution tile: ', nexecution
+    endif
+  endif
 
   ! Option of repeating calculation multiple time for more accurate
   ! profiling
@@ -442,6 +467,60 @@ program ecrad_ifs_driver
 !    if (driver_config%do_parallel) then
       ! Run radiation scheme over blocks of columns in parallel
 
+    if (do_batch) then
+      call system_clock(count=t(1))
+      do jrl = 1, ncol, nexecution
+        nactive = min(nexecution, ncol-jrl+1)
+        ibfirst = (jrl-1)/nproma+1
+        iblast = (jrl+nactive-2)/nproma+1
+        nblocks = iblast-ibfirst+1
+        if (driver_config%iverbose >= 3) then
+          write(nulout,'(a,i0,a,i0)') 'Processing columns ', jrl, '-', jrl+nactive-1
+        endif
+
+        ! The actual section is contiguous. Map only this bounded run of
+        ! blocks, avoiding both whole-domain residence and strided transfers.
+        call gather_execution_tile(nproma, ifs_config%ifldstot, nblocks, &
+             & nexecution, nactive, zrgp(:,:,ibfirst:iblast), full_fields)
+        full_seed(:) = 0
+        do icol = 1, nactive
+          jblock = (icol-1)/nproma
+          jcolumn = mod(icol-1,nproma)+1
+#ifdef BITIDENTITY_TESTING
+          full_seed(icol) = iseed(jcolumn,ibfirst+jblock)
+#else
+          ! init_seed_simple restarts at one in each original model block.
+          full_seed(icol) = jcolumn
+#endif
+          ! RADIATION_SCHEME reads the first two pressure half-levels on
+          ! the host to determine vertical ordering; other fields stay device-only.
+          do jfield = ifs_config%iaprs, ifs_config%iaprs+1
+            full_fields(icol,jfield) = zrgp(jcolumn,jfield,ibfirst+jblock)
+          enddo
+        enddo
+        !$acc update device(full_seed) async(1)
+        !$OMP TARGET UPDATE TO(full_seed)
+        call system_clock(count=t(3))
+        call run_radiation_tile(nexecution, nactive, full_fields, full_seed)
+        call system_clock(count=t(4))
+        kernel_dt = kernel_dt + (t(4)-t(3))/dble(count_rate)
+
+        ! Download contiguous output fields and scatter on the host. This
+        ! avoids runtime-dependent strided multi-block output transfers.
+        !$acc update host(full_fields(:,ifs_config%ioutbeg:ifs_config%ioutend)) async(1)
+        !$acc wait(1)
+        !$OMP TARGET UPDATE FROM(full_fields(:,ifs_config%ioutbeg:ifs_config%ioutend))
+        do jfield = ifs_config%ioutbeg, ifs_config%ioutend
+          do icol = 1, nactive
+            jblock = (icol-1)/nproma
+            jcolumn = mod(icol-1,nproma)+1
+            zrgp(jcolumn,jfield,ibfirst+jblock) = full_fields(icol,jfield)
+          enddo
+        enddo
+      enddo
+      call system_clock(count=t(2))
+      total_dt = (t(2)-t(1))/dble(count_rate)
+    else
 #ifndef OMPGPU
       !$OMP PARALLEL DO SCHEDULE(DYNAMIC,1) REDUCTION(+:total_dt,kernel_dt)&
       !$OMP&PRIVATE(JRL,IBEG,IEND,IL,IB,t)
@@ -586,6 +665,7 @@ program ecrad_ifs_driver
 #ifndef OMPGPU
       !$OMP END PARALLEL DO
 #endif
+    endif
 !    else
       ! Run radiation scheme serially
 !      if (driver_config%iverbose >= 3) then
@@ -626,6 +706,12 @@ program ecrad_ifs_driver
   call ifs_copy_fluxes_from_blocked(driver_config, ifs_config, yradiation, ncol, nlev,&
           & zrgp, flux, flux_sw_direct_normal, flux_uv, flux_par, flux_par_clear, &
           & emissivity_out, flux_diffuse_band, flux_direct_band)
+
+  if (do_batch) then
+    !$acc exit data delete(full_fields, full_seed)
+    !$OMP TARGET EXIT DATA MAP(DELETE:full_fields, full_seed)
+    deallocate(full_fields, full_seed)
+  endif
 
   ! "up" fluxes are actually net fluxes at this point - we modify the
   ! upwelling flux so that net=dn-up, while the TOA and surface
@@ -671,5 +757,88 @@ program ecrad_ifs_driver
 #ifdef HAVE_FIAT
   call mpl_end(ldmeminfo=.false.)
 #endif
+
+contains
+
+  ! Map a bounded contiguous source section, gather on device, then release
+  ! the source before radiation scratch is allocated. No module owns mappings.
+  subroutine gather_execution_tile(kproma, kfields, kblocks, kcol, kactive, pblocks, pfields)
+    use yomhook, only : lhook, dr_hook, jphook
+    integer(jpim), intent(in) :: kproma, kfields, kblocks, kcol, kactive
+    real(jprb), intent(in) :: pblocks(kproma,kfields,kblocks)
+    real(jprb), intent(inout) :: pfields(kcol,kfields)
+    integer(jpim) :: jf, jc, jb, jl, iinend, ioutend
+    real(jphook) :: zhook_handle
+
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%GATHER_EXECUTION_TILE',0,zhook_handle)
+    iinend = ifs_config%iinend
+    ioutend = ifs_config%ioutend
+    !$acc data copyin(pblocks) present(pfields)
+    !$acc parallel loop collapse(2) present(pblocks,pfields) private(jb,jl) async(1)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) &
+    !$OMP& MAP(TO:pblocks) MAP(ALLOC:pfields) PRIVATE(jb,jl)
+    do jf = 1, kfields
+      do jc = 1, kcol
+        if (jc <= kactive .and. (jf <= iinend .or. jf > ioutend)) then
+          jb = (jc-1)/kproma+1
+          jl = mod(jc-1,kproma)+1
+          pfields(jc,jf) = pblocks(jl,jf,jb)
+        else
+          pfields(jc,jf) = 0.0_jprb
+        endif
+      enddo
+    enddo
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+    !$acc wait(1)
+    !$acc end data
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%GATHER_EXECUTION_TILE',1,zhook_handle)
+  end subroutine gather_execution_tile
+
+  subroutine run_radiation_tile(kcol, kend, pfields, kseed)
+    use yomhook, only : lhook, dr_hook, jphook
+    integer(jpim), intent(in) :: kcol, kend
+    real(jprb), intent(inout) :: pfields(kcol,ifs_config%ifldstot)
+    integer(jpim), intent(in) :: kseed(kcol)
+    real(jphook) :: zhook_handle
+
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%RUN_RADIATION_TILE',0,zhook_handle)
+    call radiation_scheme &
+         & (yradiation, 1, kend, kcol, nlev, size(aerosol%mixing_ratio,3), &
+         &  single_level%solar_irradiance, &
+         &  pfields(:,ifs_config%iamu0), pfields(:,ifs_config%its), &
+         &  pfields(:,ifs_config%iald), pfields(:,ifs_config%ialp), &
+         &  pfields(:,ifs_config%iemiss), &
+         &  pfields(:,ifs_config%iccnl), pfields(:,ifs_config%iccno), &
+         &  pfields(:,ifs_config%igelam),pfields(:,ifs_config%igemu), &
+         &  pfields(:,ifs_config%islm), &
+         &  pfields(:,ifs_config%ipr), pfields(:,ifs_config%iti), &
+         &  pfields(:,ifs_config%iaprs), pfields(:,ifs_config%ihti), &
+         &  pfields(:,ifs_config%iwv), pfields(:,ifs_config%iico2), &
+         &  pfields(:,ifs_config%iich4), pfields(:,ifs_config%iin2o), &
+         &  pfields(:,ifs_config%ino2), pfields(:,ifs_config%ic11), &
+         &  pfields(:,ifs_config%ic12), pfields(:,ifs_config%ic22), &
+         &  pfields(:,ifs_config%icl4), pfields(:,ifs_config%ioz), &
+         &  pfields(:,ifs_config%iclc), pfields(:,ifs_config%ilwa), &
+         &  pfields(:,ifs_config%iiwa), pfields(:,ifs_config%irwa), &
+         &  pfields(:,ifs_config%iswa), &
+         &  pfields(:,ifs_config%iaer), pfields(:,ifs_config%iaero), &
+         &  pfields(:,ifs_config%ifrso), pfields(:,ifs_config%ifrth), &
+         &  pfields(:,ifs_config%iswfc), pfields(:,ifs_config%ilwfc), &
+         &  pfields(:,ifs_config%ifrsod),pfields(:,ifs_config%ifrted), &
+         &  pfields(:,ifs_config%ifrsodc),pfields(:,ifs_config%ifrtedc), &
+         &  pfields(:,ifs_config%ifdir), pfields(:,ifs_config%icdir), &
+         &  pfields(:,ifs_config%isudu), &
+         &  pfields(:,ifs_config%iuvdf), pfields(:,ifs_config%iparf), &
+         &  pfields(:,ifs_config%iparcf),pfields(:,ifs_config%itincf), &
+         &  pfields(:,ifs_config%iemit), pfields(:,ifs_config%ilwderivative), &
+         &  pfields(:,ifs_config%iswdiffuseband), pfields(:,ifs_config%iswdirectband) &
+#ifdef BITIDENTITY_TESTING
+         &  ,pre_liq=pfields(:,ifs_config%ire_liq), &
+         &  pre_ice=pfields(:,ifs_config%ire_ice), &
+         &  pcloud_overlap=pfields(:,ifs_config%ioverlap) &
+#endif
+         &  ,iseed=kseed)
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%RUN_RADIATION_TILE',1,zhook_handle)
+  end subroutine run_radiation_tile
 
 end program ecrad_ifs_driver

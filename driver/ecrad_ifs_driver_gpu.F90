@@ -344,6 +344,9 @@ program ecrad_ifs_driver
   allocate(ccn_land(ncol))
   allocate(ccn_sea(ncol))
   allocate(land_frac(ncol))
+  ! Offline inputs do not supply a land mask. Define the ocean default
+  ! rather than letting heap contents select cloud-droplet properties.
+  land_frac(:) = 0.0_jprb
   allocate(pressure_fl(ncol,nlev))
   allocate(temperature_fl(ncol,nlev))
   allocate(zeros(ncol,nlev))

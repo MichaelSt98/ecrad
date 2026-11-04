@@ -5,6 +5,8 @@ Run once with a BITIDENTITY_TESTING CPU build, then pass its output directory
 as --reference-directory when running an offload build on a GPU. Requires the
 numpy/xarray environment used by test/common/nccmp. Both precisions and all
 three drivers must be built. Output/log files are retained for diagnosis.
+For ordinary blocked-driver builds use --drivers ecrad_ifs_blocked
+--block-local-seeds: stochastic output is compared at fixed logical block size.
 """
 
 import argparse
@@ -58,13 +60,24 @@ def main():
     parser.add_argument("--build-directory", required=True, type=Path)
     parser.add_argument("--output-directory", required=True, type=Path)
     parser.add_argument("--namelist", required=True, type=Path)
+    parser.add_argument("--input-file", type=Path,
+                        help="Input profiles (defaults to test/ifs/ecrad_meridian.nc)")
     parser.add_argument("--reference-directory", type=Path)
     parser.add_argument("--drivers", nargs="+", choices=DRIVERS, default=DRIVERS)
     parser.add_argument("--precisions", nargs="+", choices=PRECISIONS, default=PRECISIONS)
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[],
-                        help="Also test ECRAD_FULL_BATCH_SIZE in flat GPU drivers")
+                        help="Also test ECRAD_FULL_BATCH_SIZE in GPU drivers")
+    parser.add_argument("--block-local-seeds", action="store_true",
+                        help="Compare ordinary blocked builds at fixed logical block size")
     args = parser.parse_args()
+    if args.block_local_seeds and (args.drivers != ["ecrad_ifs_blocked"] or args.reference_directory):
+        parser.error("--block-local-seeds requires only ecrad_ifs_blocked and no CPU reference")
     root = Path(__file__).resolve().parents[2]
+    input_file = (args.input_file or root / "test/ifs/ecrad_meridian.nc").resolve()
+    with xr.open_dataset(input_file) as profiles:
+        ncol = profiles.sizes["column"]
+    if ncol < 8:
+        parser.error("The blocking matrix requires at least eight columns")
     build = args.build_directory.resolve()
     output_dir = args.output_directory.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -73,13 +86,15 @@ def main():
         reference_dir = reference_dir.resolve()
     env = dict(os.environ, OMP_NUM_THREADS="1")
     env.pop("ECRAD_FULL_BATCH_SIZE", None)
-    # Full input has 32 columns. Include singleton, odd, exact and oversized
+    # Include singleton, odd, exact and oversized
     # blocks, plus a non-unit active range with a partial final block.
-    cases = [(size, repeat, 1, 32) for size in (1, 7, 15, 32, 33)
+    cases = [(size, repeat, 1, ncol) for size in (1, 7, 15, ncol, ncol+1)
              for repeat in (1, 3)]
-    cases += [(7, repeat, 5, 29) for repeat in (1, 3)]
+    cases += [(7, repeat, 5, ncol-3) for repeat in (1, 3)]
     summary = {
         "build_directory": str(build), "runs": [], "completed": False,
+        "block_local_seeds": args.block_local_seeds,
+        "input_file": str(input_file), "columns": ncol,
         "limitations": [
             "The IFS blocked drivers ignore istartcol/iendcol; their offset-range cases are skipped.",
             "OMP_NUM_THREADS=1 tests sequential calls, not host-thread concurrency.",
@@ -91,13 +106,14 @@ def main():
         for driver in args.drivers:
             binary = build / "bin" / f"{driver}_{precision}"
             baseline = output_dir / f"baseline_{driver}_{precision}.nc"
-            runs = [(32, 1, 1, 32, False, 0)]
+            block_baselines = {}
+            runs = [(ncol, 1, 1, ncol, False, 0)]
             runs += [(size, repeat, first, last, True, 0)
                      for size, repeat, first, last in cases]
-            if driver != "ecrad_ifs_blocked":
-                runs += [(size, 3, first, last, True, batch)
-                         for size in (1, 7, 15) for batch in args.batch_sizes
-                         for first, last in ((1, 32), (5, 29))]
+            tile_sizes = (1, 7, 15, ncol, ncol+1) if driver == "ecrad_ifs_blocked" else (1, 7, 15)
+            runs += [(size, 3, first, last, True, batch)
+                     for size in tile_sizes for batch in args.batch_sizes
+                     for first, last in ((1, ncol), (5, ncol-3))]
             for size, repeat, first, last, blocked, batch in runs:
                 if driver == "ecrad_ifs_blocked" and first != 1:
                     continue
@@ -123,13 +139,13 @@ def main():
                 with log_path.open("w") as log:
                     subprocess.run([
                         str(binary), str(namelist),
-                        str(root / "test/ifs/ecrad_meridian.nc"), str(output),
+                        str(input_file), str(output),
                     ], cwd=output_dir, env=run_env, stdout=log,
                         stderr=subprocess.STDOUT, check=True)
                 if batch:
                     # Observe the actual radiation-call ranges, so a driver
                     # silently ignoring the batching switch cannot pass.
-                    width = min(32, batch * size)
+                    width = min(ncol, batch * size)
                     expected = [(start, min(start + width - 1, last))
                                 for start in range(first, last + 1, width)] * repeat
                     actual = [(int(a), int(b)) for a, b in re.findall(
@@ -141,7 +157,12 @@ def main():
                 # The baseline self-comparison also checks finite outputs.
                 lw = 2e-4 if precision == "sp" else 0.0
                 sw = 1e-6 if precision == "sp" else 0.0
-                errors = compare(baseline, output, first, last, lw, sw)
+                reference = baseline
+                if args.block_local_seeds:
+                    if not batch and size not in block_baselines:
+                        block_baselines[size] = output
+                    reference = block_baselines[size]
+                errors = compare(reference, output, first, last, lw, sw)
                 entry = {"case": label, "within_backend_errors": errors}
                 if reference_dir is not None:
                     reference = reference_dir / f"baseline_{driver}_{precision}.nc"

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "acc_and_omp_matched_sampler_baselines_validated",
+  "status": "acc_and_omp_execution_tiles_validated",
   "integration_branch": "nams-main-gpu",
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],
@@ -156,7 +156,7 @@
   },
   "prototype_scope": {
     "baseline_source": "origin/master-omp at b97c15f",
-    "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. Flat-driver execution grouping adapts the full-pipeline tile control from both forks; their blocked-layout tiling implementations have not yet been integrated.",
+    "history_strategy": "Local merge prototype retains original baseline GPU history; PR #122's unchanged positive metadata regression has been imported. Full-pipeline tiles in flat and blocked drivers adapt Michael Staneker's ACC and Paul Mullowney's OMP contributions with shared controls and bounded caller-owned storage.",
     "cpu_layout": "Main CPU RRTMG routines and coefficient initialisation retained; accelerator routines selected separately by CMake.",
     "gpu_layout_adaptation": "A preprocessor access-permutation header adapts accelerator coefficient references to main tables; the OpenACC RRTMG smoke case passes matched-sampler CPU/device comparisons in both precisions.",
     "public_containers": "Main pointer-based containers retained, but inherited accelerator lifecycle code still needs pointer/allocatable reconciliation.",
@@ -166,7 +166,7 @@
       "Consolidate duplicated driver and integration sources after validation; the duplicate GPU NetCDF reader has been removed in favour of main's pointer-aware reader.",
       "Reconcile accelerator build selection with FIELD_API and the Makefile build.",
       "Broaden coefficient access and accelerator interface device coverage beyond the validated OpenACC RRTMG smoke case.",
-      "Integrate ACC optimisations, full-pipeline tiling and RAPS coupling fixes with provenance.",
+      "Evaluate the remaining ACC deferred solver contexts and RAPS coupling fixes with provenance.",
       "Complete cross-compiler, numerical, concurrency, memory and performance checks."
     ]
   },
@@ -294,7 +294,7 @@
         "contribution": "Exact assignment-key matching to avoid prefix aliasing in change_namelist.sh."
       }
     ],
-    "next_investigation": "Broaden accelerator coverage and integrate execution tiling and RAPS coupling changes, preserving the validated matched-sampler baselines."
+    "next_investigation": "Measure validated execution tiles, broaden accelerator coverage and integrate explicit caller-owned RAPS coupling, preserving the matched-sampler baselines."
   },
   "openmp_target_checkpoint": {
     "compiler": "NVHPC 24.5",
@@ -396,6 +396,7 @@
     "public_physics_interface_changed": false,
     "cpu_driver_execution_changed": false,
     "new_module_global_state": false,
+    "ordinary_build_followup": "blocked_driver_execution_tiles.validation.flat_ifs_followup",
     "validation": {
       "runner": "test/ifs/check_gpu_blocking.py --drivers ecrad ecrad_ifs --batch-sizes 1 2 4 64",
       "job_script": "build/gpu-flat-tiles.sbatch",
@@ -434,12 +435,108 @@
         "contribution": "OpenMP-target full-pipeline execution tiles using the same control and retained logical-block seed identity."
       }
     ],
-    "next_blocked_layout_work": [
-      "Adapt device-side gather/scatter into bounded caller-owned execution-tile storage for the IFS blocked driver, sharing lifecycle and control across ACC and OMP.",
-      "Preserve block-local seed indices in ordinary builds as well as explicit global seeds in BITIDENTITY_TESTING builds.",
-      "Preserve host pressure metadata reads and padding behavior when radiation_scheme consumes a device-packed tile.",
+    "next_work": [
       "Keep RAPS offload ownership explicit per caller/configuration rather than importing the module-global config_on_device flag unchanged.",
       "Measure full-domain execution time and peak memory after blocked-layout correctness is established."
+    ]
+  },
+  "blocked_driver_execution_tiles": {
+    "date": "2026-11-04",
+    "status": "validated_on_acc_and_omp",
+    "driver": "ecrad_ifs_blocked",
+    "control": "ECRAD_FULL_BATCH_SIZE=K, using the same execution_blocksize helper as the flat drivers; unset, empty or zero retains per-block execution.",
+    "source_concepts": [
+      {"author": "Michael Staneker", "commit": "953bebc043754f04c22112d37a439748c1e7d964"},
+      {"author": "Paul Mullowney", "commit": "c9429450fe62497fc70b9fb60e65c5d9d34fae93"}
+    ],
+    "implementation": {
+      "model_storage_unchanged": true,
+      "public_physics_interface_changed": false,
+      "cpu_sources_changed": false,
+      "new_module_global_state": false,
+      "gather": "Map only the current contiguous source-block run through an explicit-shape dummy, gather inputs on device and zero outputs/padding. Release the source mapping before physics scratch allocation; do not map the entire model domain.",
+      "scatter": "Download contiguous tile output fields, then scatter active rows into the original host block layout. Avoid runtime-dependent strided transfers across blocks.",
+      "seeds": "Pass explicit tile seeds in both build modes: original input seeds under BITIDENTITY_TESTING, original block-local jcolumn otherwise.",
+      "host_metadata": "Mirror the top two pressure half-levels from original host blocks for radiation_scheme's vertical-order check.",
+      "ownership": "The driver creates and deletes its execution scratch mappings. Each gather owns only its temporary source mapping; no persistent module ownership flag is introduced."
+    },
+    "ordinary_build_defects_fixed": [{
+      "files": ["driver/ecrad_ifs_driver_blocked_gpu.F90", "driver/ecrad_ifs_driver_gpu.F90"],
+      "cause": "Inherited land_frac allocation was never initialised. Ordinary SP cloud-droplet properties changed with heap contents; BITIDENTITY_TESTING overrides hid the defect.",
+      "correction": "Define an ocean default for the flat and blocked offline GPU drivers' otherwise unspecified land mask, for both tiled and per-block execution.",
+      "initial_failure_jobs": ["35878055_0", "35878055_1"],
+      "cpu_behavior_changed": false
+    }, {
+      "file": "ifs/radiation_scheme_gpu.F90",
+      "cause": "The cloud-overlap array dummy has bounds ISTARTCOL:IENDCOL, but radiation_scheme passed the whole KLON-sized decorrelation-length array. Later flat-driver blocks read inactive values from the wrong offset. Test-only overlap overrides hid the defect.",
+      "correction": "Pass ZDECORR_LEN_KM(KIDIA:KFDIA) to SET_OVERLAP_PARAM.",
+      "initial_failure_jobs": ["35895905_0", "35895905_1"],
+      "cpu_behavior_changed": false
+    }],
+    "validation": {
+      "compiler": "NVHPC 24.5",
+      "device": "NVIDIA A100",
+      "precisions": ["dp", "sp"],
+      "host_threads": 1,
+      "runner": "test/ifs/check_gpu_blocking.py --drivers ecrad_ifs_blocked --batch-sizes 1 2 4 64",
+      "controlled": {
+        "jobs": {"ACC": "35904799_0", "OMP": "35904799_1"},
+        "results": "build/blocked-tile-audit/{acc,omp}/summary.json",
+        "runs_passed_per_backend": 62,
+        "tiled_runs_per_backend": 40,
+        "logical_block_sizes": [1, 7, 15, 32, 33],
+        "blocks_per_tile": [1, 2, 4, 64],
+        "cpu_comparison_thresholds_W_m2": {"lw": 0.001, "sw": 0.1},
+        "maximum_cpu_difference_W_m2": {"ACC": 0.0108642578125, "OMP": 0.010986328125},
+        "positive_device_tests_passed": {"ACC": 4, "OMP": 2}
+      },
+      "ordinary": {
+        "builds": "build/{acc,omp}-normal, ENABLE_BITIDENTITY_TESTING=OFF",
+        "comparison": "--block-local-seeds compares repeats and tiled calls against the unbatched control at the same logical block size.",
+        "jobs": {"ACC": "35903470_0", "OMP": "35903470_1"},
+        "results": "build/blocked-normal-audit/{acc,omp}/summary.json",
+        "runs_passed_per_backend": 62,
+        "tiled_runs_per_backend": 40
+      },
+      "wide_input": {
+        "recipe": "Repeat the 32-column ecrad_meridian profiles with column indices numpy.arange(449) % 32, retaining all original fields and levels.",
+        "runner_option": "--input-file build/wide_profiles_<backend>.nc --batch-sizes 2 64",
+        "columns": 449,
+        "jobs": {"ACC": "35883595_0", "OMP": "35883595_1"},
+        "results": "build/blocked-wide-audit/{acc,omp}/summary.json",
+        "runs_passed_per_backend": 42,
+        "tiled_runs_per_backend": 20,
+        "coverage": "449 singleton blocks or 65 seven-column blocks, including contiguous 64-block uploads, later tile starts, partial final blocks and partial tiles."
+      },
+      "maximum_within_backend_saved_numeric_difference_all_matrices": 0.0,
+      "actual_radiation_call_ranges_checked": true,
+      "flat_ifs_followup": {
+        "jobs": {"ACC": "35903468_0", "OMP": "35903468_1"},
+        "results": "build/flat-mask-audit/{acc,omp}/{controlled,normal}/summary.json",
+        "controlled_runs_passed_per_backend": 74,
+        "ordinary_runs_passed_per_backend": 74,
+        "maximum_within_backend_saved_numeric_difference": 0.0,
+        "controlled_cpu_reference_comparisons_passed": true,
+        "coverage": "Logical blocks, grouped tiles, repeats and non-unit active ranges in both precisions. Ordinary builds compute physical cloud effective radius and overlap, exercising the land-mask initialisation and active-range decorrelation-length correction."
+      },
+      "memcheck": {
+        "OMP": "35903470_1: ordinary DP/SP, logical block 7, two blocks per tile, three repeats; ERROR SUMMARY: 0 errors in both runs.",
+        "ACC": "35890973: ordinary DP/SP unbatched controls and tiled calls, plus controlled DP/SP tiled calls; six runs with ERROR SUMMARY: 0 errors. 35903470_0 repeats the ordinary tiled DP/SP checks successfully after the active-range overlap correction.",
+        "ACC_environment": {"NVCOMPILER_ACC_CUDA_STACKSIZE": "32768"},
+        "ACC_stack_control": "Without the increased stack, sanitizer reports an out-of-range local/shared address in the existing McICA LW derivative call in both unbatched and tiled controls. Increasing only NVCOMPILER_ACC_CUDA_STACKSIZE resolves it without source changes.",
+        "ACC_results": "build/acc-memcheck-audit/summary.json"
+      },
+      "quick_check_findings": 0,
+      "diff_check_clean": true,
+      "fortls": "Attempted on both changed Fortran drivers and radiation_scheme_gpu; launcher exits 1 without diagnostics.",
+      "performance_measured": false
+    },
+    "limitations": [
+      "Only the controlled RRTMG/McICA ACC configuration and its ordinary cloud-radius/overlap counterpart were tested; this is not full solver/configuration coverage.",
+      "The blocked driver continues to process the full input domain and ignore istartcol/iendcol.",
+      "Host-thread concurrency and caller/configuration interleaving are not validated.",
+      "Execution tiles require COPY_ASYNC disabled.",
+      "Full-domain timing and peak-memory benchmarking, explicit caller-owned offload lifecycles, and deferred solver contexts remain follow-up work."
     ]
   }
 }

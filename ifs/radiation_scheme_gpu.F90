@@ -726,8 +726,10 @@ DO JLON = KIDIA,KFDIA
 ENDDO
 !$ACC END PARALLEL
 !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+! The overlap dummy is bounded KIDIA:KFDIA, so pass the matching section;
+! passing the whole array shifts later blocks onto inactive input values.
 call YLCLOUD%SET_OVERLAP_PARAM(THERMODYNAMICS,&
-      &                       ZDECORR_LEN_KM,&
+      &                       ZDECORR_LEN_KM(KIDIA:KFDIA),&
       &                       ISTARTCOL=KIDIA, IENDCOL=KFDIA, &
       &                       LACC=LLACC)
 ! Added for bit-identity validation against ecrad standalone:
