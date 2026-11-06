@@ -1,15 +1,20 @@
 {
   "schema_version": 1,
   "audit_date": "2026-11-03",
-  "status": "gpu_sp_performance_and_memory_optimized_with_small_acc_tiled_gap",
+  "status": "gpu_sp_branch_relative_targets_met_with_matched_acc_source_residency",
   "integration_branch": "nams-main-gpu",
   "performance_optimization": {
-    "date": "2026-11-04",
-    "report": "gpu-performance-sp-optimized.json",
-    "acc_omp_time_within_10_percent": true,
+    "date": "2026-11-05",
+    "report": "gpu-performance-sp-matrix.json",
+    "previous_report": "gpu-performance-sp-albedo.json",
+    "priority": "Unified branch versus the corresponding valid base, with GPU/CPU throughput secondary",
+    "historical_acc_omp_time_within_10_percent_at_original_setting": true,
     "memory_comparable_to_valid_bases": true,
-    "cpu_original_outputs_exact_to_main": 104,
-    "residual": "ACC is 5.33% slower than the resident-input tiled fork, narrowly missing the proposed strict 5% target; it is faster than the linked ACC branch and its equivalent-width control."
+    "historical_cpu_original_outputs_exact_to_main": 104,
+    "native_cpu_branch_runtime_target_met": true,
+    "normal_gpu_branch_runtime_targets_met": true,
+    "tiled_gpu_branch_runtime_targets_met_in_matched_configurations": true,
+    "assessment": "All final paired branch comparisons are faster: CPU 1.2-2.0%, normal ACC 8.3-13.9%, normal OMP 5.3-7.8%, tiled ACC 1.0-2.4%, tiled OMP 5.2-13.8%. ACC tiling uses optional driver-owned resident model sources to match its base; default bounded staging remains available and retains small regressions at execution widths 1024/2048. OMP tiling uses the valid equivalent-width unbatched control because the upstream packed path fails numerical validation. Host/device memory stays within 5% of valid bases. The inherited full-domain CPU/GPU LW tolerance miss remains unresolved."
   },
   "requirements": {
     "backends": ["CPU", "OpenACC", "OpenMP target"],

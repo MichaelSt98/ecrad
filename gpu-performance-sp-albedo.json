@@ -1,0 +1,97 @@
+{
+  "assessment": "Close the remaining ACC tiled runtime gap with scalar weighted SW albedo mapping",
+  "date": "2026-11-05",
+  "implementation_parent_revision": "8896d70",
+  "previous_assessment": "gpu-performance-sp-optimized.json",
+  "scope": "NVHPC 24.5, SP RRTMG/McICA, A100-SXM4-40GB; same 16960-column/137-level workload, NPROMA=32, K=32, two GPU ranks. SP/DP correctness checks use the smaller controlled and wide inputs.",
+  "changes": [
+    "ACC weighted SW albedo mapping reuses the existing explicit-shape scalar get_albedo_bands_omp helper, with ACC gang/vector parallelism and sequential native-band accumulation. Retain the helper name and public interface.",
+    "Keep the original ACC zero-weight skip and OMP accumulation policy; preserve separate direct/diffuse albedos and copy diffuse to direct on the device when the direct input is absent.",
+    "Remove the unused ACC sw_albedo_band/lw_albedo_band device mappings. Native CPU weighted mappings still use their existing host scratch arrays and arithmetic.",
+    "Retain the bounded driver staging, source-release-before-physics lifetime and existing gather/scatter implementation."
+  ],
+  "protocol": {
+    "inherited_from": "gpu-performance-sp-optimized.json#/protocol",
+    "statistic": "Five alternating-order process groups, six iterations per process, first iteration excluded; median of the five group medians. Timed GPU iteration is the maximum of two rank times.",
+    "timing": "Synchronized full radiation iterations, including iteration transfers and gather/scatter, excluding initialization and NetCDF I/O. All reported new timing ratios are paired within an allocation.",
+    "memory": "MiB; maximum across groups of the sum of process peak RSS or 20-ms-sampled NVML device peaks. Includes CUDA context/reservations; rank peaks are not necessarily simultaneous.",
+    "reference_ownership_clarification": "The tiled fork creates resident zrgp storage outside the timer, but updates input fields inside every timed iteration. The integration uses bounded per-tile source mappings. Residency alone does not isolate the remaining overhead.",
+    "acc_binary_sha256": "d9465b2ffdde912f2f16613b4648c1cf3530fc269a16cfc1f5205ab8af92e2a7",
+    "reference_acc_revision": "475b28a9f000cd509f9bec9d9868dae2bc726d72",
+    "omp_timing_control": "Unchanged integrated OMP implementation built at the preceding checkpoint; the shared helper's OMP loop and arithmetic are unchanged. The current SP/DP OMP source also rebuilds successfully."
+  },
+  "measurements": {
+    "36253235": {
+      "node": "ac6-300",
+      "elapsed_seconds": 84,
+      "status": "COMPLETED 0:0",
+      "acc-tiled": {"seconds": 0.2265871, "range_s": [0.2259763, 0.2269368], "host_MiB": 1467.8203125, "device_MiB": 6784},
+      "optimized-acc-tiled": {"seconds": 0.2370031, "range_s": [0.2367139, 0.2372292], "host_MiB": 1382.71484375, "device_MiB": 5596},
+      "optimized-omp-tiled": {"seconds": 0.2534721, "range_s": [0.253232, 0.2539439], "host_MiB": 1408.40625, "device_MiB": 5592},
+      "acc_tiled_vs_reference_percent": 4.59690776747661,
+      "acc_vs_omp_tiled_percent": -6.497362037084153
+    },
+    "36254717": {
+      "node": "ac6-301",
+      "elapsed_seconds": 240,
+      "status": "COMPLETED 0:0",
+      "acc-tiled": {"seconds": 0.225872, "range_s": [0.2256708, 0.2261932], "host_MiB": 1468.2578125, "device_MiB": 6784},
+      "optimized-acc-tiled": {"seconds": 0.2362389, "range_s": [0.236222, 0.2365539], "host_MiB": 1382.82421875, "device_MiB": 5596},
+      "optimized-omp-tiled": {"seconds": 0.2533262, "range_s": [0.252588, 0.2535359], "host_MiB": 1407.9921875, "device_MiB": 5592},
+      "optimized-acc": {"seconds": 2.0786619},
+      "optimized-omp": {"seconds": 2.2930648},
+      "acc_tiled_vs_reference_percent": 4.589723383155064,
+      "acc_vs_omp_tiled_percent": -6.745176772082795,
+      "acc_vs_omp_per_block_percent": -9.35005848940682
+    }
+  },
+  "target_assessment": {
+    "acc_tiled_no_more_than_5_percent_slower_than_valid_reference": true,
+    "confirmed_on_two_nodes": true,
+    "acc_omp_runtime_ratio_between_0_9_and_1_1_tiled_and_per_block": true,
+    "acc_device_memory_unchanged_from_parent_MiB": 5596,
+    "acc_device_memory_below_tiled_reference_MiB": 1188,
+    "acc_device_memory_above_omp_MiB": 4,
+    "interpretation": "The remaining strict ACC tiled target is met in both new allocations, with a narrow approximately 0.4 percentage-point margin. CPU and other valid-base runtime/memory assessments remain recorded in the preceding report; they were not all rebenchmarked here."
+  },
+  "profiling": {
+    "before_job": "36252236",
+    "after_job": "36254716",
+    "before_weighted_sw_kernel": {"calls": 54, "total_ns": 4705098},
+    "after_weighted_sw_kernels": {"calls": 108, "total_ns": 486843},
+    "interpretation": "One older kernel becomes two explicit scalar-helper calls (direct and diffuse). Approximately 87.1 us becomes 9.0 us per radiation call, or about 0.70 ms saved across nine tiles per rank/iteration. Profiles cover complete processes and are separate from unprofiled acceptance timings; this is diagnostic evidence, not a paired before/after whole-iteration speedup measurement.",
+    "raw_reports": "build/perf-sp/profile-{36252236,36254716}-*"
+  },
+  "validation": {
+    "job": "36253575",
+    "status": "COMPLETED 0:0",
+    "acc_sp_dp_extended_physics_cases": 42,
+    "acc_sp_dp_wide_partial_tile_cases": 42,
+    "saved_output_equivalence": {"files": 84, "numeric_variables": 1138, "maximum_difference": 0, "scope": "All saved numerical variables in active columns; inactive offset-driver output is unspecified and excluded."},
+    "targeted_ctest": {"passed": 6, "failed": 0},
+    "compute_sanitizer": {"runs": 2, "errors": 0, "scope": "SP/DP standalone weighted mapping with non-unit active range", "instrumentation_only_acc_stack_bytes": 32768},
+    "all_new_benchmark_groups_repeat_exactly": true,
+    "acc_vs_valid_tiled_reference_all_numeric_exact": true,
+    "acc_vs_omp_max_errors": {"lw": 0.00006103515625, "sw": 0},
+    "rebuilds": ["ACC SP/DP correctness build", "ACC SP performance build", "OMP SP/DP correctness build", "CPU SP performance build"],
+    "additional_cpu_sp_weighted_smoke": {"reference": "Saved matched-sampling CPU correctness output, built with a different flag configuration", "lw_max": 0.00042724609375, "sw_max": 0.0252685546875, "within_existing_thresholds": true, "bitwise_exact": false},
+    "diff_check": "Passed",
+    "quick_check": "One S1 END IF style finding; the spelling follows radiation/CONVENTIONS. No other added-line findings.",
+    "fortls": "Attempted on the changed source; launcher exits 1 without diagnostics."
+  },
+  "limitations": [
+    "The existing larger-input GPU/matched-CPU LW difference remains 0.003814697265625 W/m2, exceeding the unchanged 0.001 threshold. The valid GPU references share it. No full-domain CPU/GPU correctness claim is made.",
+    "Performance remains specific to the measured SP workload, tile width and hardware. The preceding report's solver, scaling and interface coverage limits still apply.",
+    "The diffuse-only fallback is preserved in the implementation; no separate new end-to-end absent-direct-input case was added."
+  ],
+  "reproduction": {
+    "build": "python3 test/ifs/benchmark_gpu_build.py optimized-acc",
+    "first_pair": "sbatch test/ifs/benchmark_gpu.sbatch acc-tiled optimized-acc-tiled optimized-omp-tiled",
+    "confirmation": "sbatch --exclude=ac6-300 test/ifs/benchmark_gpu.sbatch acc-tiled optimized-acc-tiled optimized-omp-tiled optimized-acc optimized-omp",
+    "analyse": "python3 test/ifs/benchmark_gpu_analyse.py JOB_ID 36032189",
+    "extended_checks": "python3 test/ifs/check_gpu_optimizations.py --gpu-build build/acc --reference-directory build/perf-sp/extended-reference --output-directory OUTPUT --namelist build/acc/gpu-smoke.nam",
+    "raw_assessments": "build/perf-sp/results/{36253235,36254717}/assessment.json",
+    "raw_validation": "build/perf-sp/{albedo-36253575,albedo-wide-36253575}/summary.json",
+    "local_validation_and_equivalence_tools": ["build/perf-sp/validate-albedo.sbatch", "build/perf-sp/check_albedo_results.py", "build/perf-sp/albedo-output-equivalence.json"]
+  }
+}
