@@ -288,11 +288,8 @@ contains
     type is (single_level_type)
     if (lhook) call dr_hook('radiation_single_level:get_albedos',0,hook_handle)
 
-    !$ACC DATA CREATE(sw_albedo_band, lw_albedo_band) ASYNC(1)
-    ! Under OMPGPU neither band array is touched from a target region:
-    ! get_albedo_bands_omp accumulates in a scalar instead, the longwave
-    ! equivalent is get_lw_albedo_omp, and the branches that do use them are
-    ! host-only or compiled out. So they need no device allocation here.
+    ! Accelerator weighted mappings accumulate in scalars. The band arrays
+    ! below are used only by the native CPU path and need no device mapping.
 
     if (config%do_sw) then
       ! Albedos/emissivities are stored in single_level in their own
@@ -317,7 +314,7 @@ contains
           call radiation_abort()
         end if
 
-#if defined(OMPGPU)
+#if defined(_OPENACC) || defined(OMPGPU)
         call get_albedo_bands_omp(istartcol, iendcol, config%n_g_sw, &
              &  config%n_bands_sw, nalbedoband, size(this%sw_albedo,1), &
              &  config%sw_albedo_weights, config%i_band_from_reordered_g_sw, &
@@ -329,13 +326,18 @@ contains
                &  config%sw_albedo_weights, config%i_band_from_reordered_g_sw, &
                &  this%sw_albedo_direct, sw_albedo_direct)
         else
+#if defined(OMPGPU)
           !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2)
+#endif
+          !$acc parallel loop gang vector collapse(2) default(present) async(1)
           do jcol = istartcol,iendcol
             do jg = 1,config%n_g_sw
               sw_albedo_direct(jg,jcol) = sw_albedo_diffuse(jg,jcol)
             end do
           end do
+#if defined(OMPGPU)
           !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
         end if
 #else
 #if defined(OMPGPU)
@@ -634,7 +636,6 @@ contains
     end if
 
     !$ACC WAIT
-    !$ACC END DATA
 
     if (lhook) call dr_hook('radiation_single_level:get_albedos',1,hook_handle)
     class default
@@ -688,6 +689,7 @@ contains
   ! derived-type component, so a single PRESENT region covers the whole
   ! body and nothing is implicitly mapped per kernel launch; see
   ! solver_mcica_omp_sw_impl for the same pattern.
+  ! ACC shares this OMP helper, retaining its original zero-weight skip.
   subroutine get_albedo_bands_omp(istartcol, iendcol, ng, nband, nalbedoband, ncol, &
        &  albedo_weights, i_band_from_reordered_g, albedo_in, albedo_out)
 
@@ -716,18 +718,31 @@ contains
     ! from the same zero, so the result is unchanged bit for bit; the only
     ! extra work is repeating a sum of nalbedoband terms per g-point rather
     ! than per band.
+#if defined(OMPGPU)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) PRIVATE(jband, jalbedoband, albedo)
+#endif
+    !$acc parallel loop gang vector collapse(2) default(present) async(1) &
+    !$acc& private(jband,jalbedoband,albedo)
     do jcol = istartcol,iendcol
       do jg = 1,ng
         jband = i_band_from_reordered_g(jg)
         albedo = 0.0_jprb
+        !$acc loop seq
         do jalbedoband = 1,nalbedoband
+#ifdef _OPENACC
+          if (albedo_weights(jalbedoband,jband) /= 0.0_jprb) then
+#endif
           albedo = albedo + albedo_weights(jalbedoband,jband) * albedo_in(jcol,jalbedoband)
+#ifdef _OPENACC
+          end if
+#endif
         end do
         albedo_out(jg,jcol) = albedo
       end do
     end do
+#if defined(OMPGPU)
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#endif
 
 #if defined(__amdflang__)
     !$OMP END TARGET DATA

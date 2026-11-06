@@ -158,7 +158,10 @@ program ecrad_ifs_driver
   integer(jpim) :: jfield, jcolumn, jblock, icol, ncopy, ifirst
   real(jprb), allocatable :: full_fields(:,:)
   integer(jpim), allocatable :: full_seed(:)
-  logical :: do_batch
+  logical :: do_batch, do_acc_resident
+#ifdef _OPENACC
+  character(len=32) :: resident_argument
+#endif
 
   ! If enabled, COPY_ASYNC stages copy in, compute and copy out of ZRGP
   ! in different streams, overlapping the copy-in of the next block with the
@@ -418,18 +421,40 @@ program ecrad_ifs_driver
   end if
 
   nexecution = driver_config%execution_blocksize(ncol, do_batch)
+  do_acc_resident = .false.
+#ifdef _OPENACC
+  call get_environment_variable('ECRAD_ACC_RESIDENT_FIELDS', resident_argument, status=istatus)
+  if (istatus == -1) call radiation_abort('ECRAD_ACC_RESIDENT_FIELDS must be 0 or 1')
+  if (istatus == 0) then
+    select case (trim(resident_argument))
+    case ('','0')
+      do_acc_resident = .false.
+    case ('1')
+      do_acc_resident = do_batch
+    case default
+      call radiation_abort('ECRAD_ACC_RESIDENT_FIELDS must be 0 or 1')
+    end select
+  endif
+#endif
 #ifdef COPY_ASYNC
   if (do_batch) call radiation_abort('Execution tiles require COPY_ASYNC disabled')
 #endif
   if (do_batch) then
     allocate(full_fields(nexecution,ifs_config%ifldstot), full_seed(nexecution))
-    full_fields(:,:) = 0.0_jprb
+    ! The gather initializes every device slot. On the host only vertical
+    ! ordering pressures are read before the contiguous output download;
+    ! both are populated below. Avoid faulting unused host input pages.
     !$acc enter data create(full_fields, full_seed)
     !$OMP TARGET ENTER DATA MAP(ALLOC:full_fields, full_seed)
     if (driver_config%iverbose >= 2) then
       write(nulout,'(a,i0)') 'Columns per full-pipeline execution tile: ', nexecution
     endif
   endif
+
+  ! Optional caller-owned model residency, matching the ACC tiled fork.
+  ! Only model storage scales with ncol; radiation scratch stays tile-bounded.
+  !$acc enter data create(zrgp) if(do_acc_resident)
+  if (do_acc_resident) write(nulout,'(a)') 'ACC_SOURCE_RESIDENT enabled'
 
   ! Option of repeating calculation multiple time for more accurate
   ! profiling
@@ -476,6 +501,11 @@ program ecrad_ifs_driver
       call system_clock(count=benchmark_start)
 #endif
       call system_clock(count=t(1))
+      if (do_acc_resident) then
+        ! Refresh inputs inside every timed iteration, including repeats.
+        !$acc update device(zrgp(:,1:ifs_config%iinend,:), &
+        !$acc& zrgp(:,ifs_config%ioutend+1:ifs_config%ifldstot,:)) async(1)
+      endif
       do jrl = 1, ncol, nexecution
         nactive = min(nexecution, ncol-jrl+1)
         ibfirst = (jrl-1)/nproma+1
@@ -485,22 +515,25 @@ program ecrad_ifs_driver
           write(nulout,'(a,i0,a,i0)') 'Processing columns ', jrl, '-', jrl+nactive-1
         endif
 
-        ! Map only this bounded contiguous block run; gather on the device.
+        ! Gather this block run; bounded mode maps only this source section.
         call gather_execution_tile(nproma, ifs_config%ifldstot, nblocks, &
-             & nexecution, nactive, zrgp(:,:,ibfirst:iblast), full_fields)
+             & nexecution, nactive, zrgp(:,:,ibfirst:iblast), full_fields, do_acc_resident)
         full_seed(:) = 0
-        do icol = 1, nactive
-          jblock = (icol-1)/nproma
-          jcolumn = mod(icol-1,nproma)+1
+        do jblock = 0, nblocks-1
+          ifirst = jblock*nproma
+          ncopy = min(nproma,nactive-ifirst)
+          do jcolumn = 1, ncopy
+            icol = ifirst+jcolumn
 #ifdef BITIDENTITY_TESTING
-          full_seed(icol) = iseed(jcolumn,ibfirst+jblock)
+            full_seed(icol) = iseed(jcolumn,ibfirst+jblock)
 #else
-          ! init_seed_simple restarts at one in each original model block.
-          full_seed(icol) = jcolumn
+            ! init_seed_simple restarts at one in each original model block.
+            full_seed(icol) = jcolumn
 #endif
-          ! Vertical ordering is inspected on the host by RADIATION_SCHEME.
-          do jfield = ifs_config%iaprs, ifs_config%iaprs+1
-            full_fields(icol,jfield) = zrgp(jcolumn,jfield,ibfirst+jblock)
+            ! Vertical ordering is inspected on the host by RADIATION_SCHEME.
+            do jfield = ifs_config%iaprs, ifs_config%iaprs+1
+              full_fields(icol,jfield) = zrgp(jcolumn,jfield,ibfirst+jblock)
+            enddo
           enddo
         enddo
         !$acc update device(full_seed) async(1)
@@ -510,8 +543,12 @@ program ecrad_ifs_driver
         call system_clock(count=t(4))
         kernel_dt = kernel_dt + (t(4)-t(3))/dble(count_rate)
 
-        ! Download contiguous output fields and scatter on the host. This
-        ! avoids runtime-dependent strided multi-block output transfers.
+#if defined(_OPENACC) && defined(__NVCOMPILER)
+        call scatter_execution_tile(nproma, ifs_config%ifldstot, nblocks, &
+             & nexecution, nactive, full_fields, zrgp(:,:,ibfirst:iblast), do_acc_resident)
+#else
+        ! Retain contiguous downloads on other backends: pitched multi-block
+        ! updates are not supported consistently by their runtimes.
         !$acc update host(full_fields(:,ifs_config%ioutbeg:ifs_config%ioutend)) async(1)
         !$acc wait(1)
         !$OMP TARGET UPDATE FROM(full_fields(:,ifs_config%ioutbeg:ifs_config%ioutend))
@@ -524,7 +561,16 @@ program ecrad_ifs_driver
             enddo
           enddo
         enddo
+#endif
       enddo
+#if defined(_OPENACC) && defined(__NVCOMPILER)
+      if (do_acc_resident) then
+        ! Publish the complete model step once, matching the input refresh.
+        ! Individual tiles have already scattered into the resident model.
+        !$acc update host(zrgp(:,ifs_config%ioutbeg:ifs_config%ioutend,:)) async(1)
+        !$acc wait(1)
+      endif
+#endif
       call system_clock(count=t(2))
       total_dt = (t(2)-t(1))/dble(count_rate)
     else
@@ -715,6 +761,7 @@ program ecrad_ifs_driver
 #if defined(_OPENACC)
 !$acc wait
 #endif
+  !$acc exit data delete(zrgp) if(do_acc_resident)
 
   ! --------------------------------------------------------
   ! Section 4c: Copy fluxes from blocked memory data
@@ -777,19 +824,26 @@ program ecrad_ifs_driver
 
 contains
 
-  ! Release bounded source staging before allocating radiation scratch.
-  subroutine gather_execution_tile(kproma, kfields, kblocks, kcol, kactive, pblocks, pfields)
+  ! In bounded mode, release source staging before radiation scratch.
+  subroutine gather_execution_tile(kproma, kfields, kblocks, kcol, kactive, pblocks, pfields, ld_source_resident)
     use yomhook, only : lhook, dr_hook, jphook
     integer(jpim), intent(in) :: kproma, kfields, kblocks, kcol, kactive
     real(jprb), intent(in) :: pblocks(kproma,kfields,kblocks)
     real(jprb), intent(inout) :: pfields(kcol,kfields)
+    logical, intent(in) :: ld_source_resident
     integer(jpim) :: jf, jc, jb, jl, iinend, ioutend
     real(jphook) :: zhook_handle
 
     if (lhook) call dr_hook('ECRAD_IFS_DRIVER%GATHER_EXECUTION_TILE',0,zhook_handle)
     iinend = ifs_config%iinend
     ioutend = ifs_config%ioutend
-    !$acc data copyin(pblocks) present(pfields)
+    ! Output slots are overwritten by radiation and need not be uploaded.
+    ! Keep one bounded mapping, including its holes, so the gather retains
+    ! the caller's original blocked strides.
+    !$acc data create(pblocks) present(pfields)
+    if (.not. ld_source_resident) then
+      !$acc update device(pblocks(:,1:iinend,:),pblocks(:,ioutend+1:kfields,:)) async(1)
+    endif
     !$acc parallel loop collapse(2) present(pblocks,pfields) private(jb,jl) async(1)
     !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) &
     !$OMP& MAP(TO:pblocks) MAP(ALLOC:pfields) PRIVATE(jb,jl)
@@ -809,6 +863,45 @@ contains
     !$acc end data
     if (lhook) call dr_hook('ECRAD_IFS_DRIVER%GATHER_EXECUTION_TILE',1,zhook_handle)
   end subroutine gather_execution_tile
+
+#if defined(_OPENACC) && defined(__NVCOMPILER)
+  ! Bounded output staging is acquired after radiation scratch is released.
+  ! Resident model outputs instead remain on device until the step ends.
+  ! Pitched updates avoid a host transpose of every output field.
+  subroutine scatter_execution_tile(kproma, kfields, kblocks, kcol, kactive, pfields, pblocks, ld_source_resident)
+    use yomhook, only : lhook, dr_hook, jphook
+    integer(jpim), intent(in) :: kproma, kfields, kblocks, kcol, kactive
+    real(jprb), intent(in) :: pfields(kcol,kfields)
+    real(jprb), intent(inout) :: pblocks(kproma,kfields,kblocks)
+    logical, intent(in) :: ld_source_resident
+    integer(jpim) :: jf, jb, jl, jc, ioutbeg, ioutend
+    real(jphook) :: zhook_handle
+
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%SCATTER_EXECUTION_TILE',0,zhook_handle)
+    ioutbeg = ifs_config%ioutbeg
+    ioutend = ifs_config%ioutend
+    !$acc data create(pblocks) present(pfields)
+    !$acc parallel loop gang vector collapse(3) present(pblocks,pfields) private(jc) async(1)
+    do jb = 1, kblocks
+      do jf = ioutbeg, ioutend
+        do jl = 1, kproma
+          jc = (jb-1)*kproma+jl
+          if (jc <= kactive) then
+            pblocks(jl,jf,jb) = pfields(jc,jf)
+          else
+            pblocks(jl,jf,jb) = 0.0_jprb
+          endif
+        enddo
+      enddo
+    enddo
+    if (.not. ld_source_resident) then
+      !$acc update host(pblocks(:,ioutbeg:ioutend,:)) async(1)
+    endif
+    !$acc wait(1)
+    !$acc end data
+    if (lhook) call dr_hook('ECRAD_IFS_DRIVER%SCATTER_EXECUTION_TILE',1,zhook_handle)
+  end subroutine scatter_execution_tile
+#endif
 
   subroutine run_radiation_tile(kcol, kend, pfields, kseed)
     use yomhook, only : lhook, dr_hook, jphook

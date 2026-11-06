@@ -878,6 +878,9 @@ contains
        &  i_band_from_reordered_g, dn_direct_g, dn_diffuse_g, &
        &  dn_direct_band, dn_band)
 
+#ifdef _OPENACC
+    use parkind1, only : jpim
+#endif
     integer,    intent(in)    :: istartcol, iendcol, ng, nband, col_lo, col_hi
     integer,    intent(in)    :: i_band_from_reordered_g(ng)
     ! Whole-array bounds preserve column addresses when processing a subrange.
@@ -889,7 +892,45 @@ contains
     real(jprb), intent(inout) :: dn_band(:,col_lo:)
 
     integer :: jcol, jband, jg
+#ifdef _OPENACC
+    integer(jpim) :: band_g_bounds(2,nband)
+    real(jprb) :: direct_sum, diffuse_sum
+#endif
 
+#ifdef _OPENACC
+    ! RRTMG's band g-points are contiguous. Bound each band's scan while
+    ! retaining the map check, so interleaved maps and empty bands work too.
+    ! Build bounds on the device; the helper does not require host mirrors.
+    !$acc data create(band_g_bounds)
+    !$acc serial present(i_band_from_reordered_g,band_g_bounds) async(1)
+    do jband = 1, nband
+      band_g_bounds(1,jband) = ng+1
+      band_g_bounds(2,jband) = 0
+    end do
+    do jg = 1, ng
+      jband = i_band_from_reordered_g(jg)
+      band_g_bounds(1,jband) = min(band_g_bounds(1,jband),jg)
+      band_g_bounds(2,jband) = jg
+    end do
+    !$acc end serial
+    !$acc parallel loop gang vector collapse(2) default(present) async(1) &
+    !$acc& private(jg,direct_sum,diffuse_sum)
+    do jcol = istartcol, iendcol
+      do jband = 1, nband
+        direct_sum = 0.0_jprb
+        diffuse_sum = 0.0_jprb
+        !$acc loop seq
+        do jg = band_g_bounds(1,jband), band_g_bounds(2,jband)
+          if (i_band_from_reordered_g(jg) == jband) then
+            direct_sum = direct_sum + dn_direct_g(jg,jcol)
+            diffuse_sum = diffuse_sum + dn_diffuse_g(jg,jcol)
+          end if
+        end do
+        dn_direct_band(jband,jcol) = direct_sum
+        dn_band(jband,jcol) = diffuse_sum + direct_sum
+      end do
+    end do
+#else
     ! One independent column per lane keeps the original g-point addition
     ! order and avoids device array-section descriptors and atomic sums.
 #if defined(OMPGPU)
@@ -917,9 +958,13 @@ contains
 #if defined(OMPGPU)
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 #endif
+#endif
 
     ! Keep call-local array descriptors alive until this launch completes.
     !$ACC WAIT(1)
+#ifdef _OPENACC
+    !$acc end data
+#endif
   end subroutine sum_surf_band_omp
 
 

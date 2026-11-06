@@ -14,6 +14,16 @@ ecbuild_add_test(
     SOURCES minstd_integer.F90
     LIBS ecrad.${PREC} ecrad_base.${PREC}
 )
+set_target_properties( ecrad_${PREC}_minstd_integer PROPERTIES
+    Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/minstd-module" )
+
+ecbuild_add_test(
+    TARGET ecrad_${PREC}_mix_initialization
+    SOURCES mix_initialization.F90
+    LIBS ecrad.${PREC} ecrad_base.${PREC}
+)
+set_target_properties( ecrad_${PREC}_mix_initialization PROPERTIES
+    Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mix-module" )
 set( TEST_IFS_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1.nam" )
 set( TEST_ECCKD_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/configCY50R1_ecckd.nam" )
 

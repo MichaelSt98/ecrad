@@ -87,6 +87,16 @@ IF (LHOOK) CALL DR_HOOK('RRTM_SETCOEF_140GP',0,ZHOOK_HANDLE)
 !$ACC   K_LAYTROP, K_LAYSWTCH, K_LAYLOW, PAVEL, P_TAVEL, P_SELFFAC, P_SELFFRAC, K_INDSELF, K_INDFOR, K_INDMINOR, &
 !$ACC   P_SCALEMINOR, P_SCALEMINORN2, P_MINORFRAC, PRAT_H2OCO2, PRAT_H2OCO2_1, PRAT_H2OO3, PRAT_H2OO3_1, PRAT_H2ON2O, &
 !$ACC   PRAT_H2ON2O_1, PRAT_H2OCH4, PRAT_H2OCH4_1, PRAT_N2OCO2, PRAT_N2OCO2_1, PRAT_O3CO2, PRAT_O3CO2_1) ASYNC(1)
+#ifdef _OPENACC
+! Independent layer coefficients follow Michael Staneker's tiled ACC source
+! (475b28a9); retain the ordered tropopause count in a separate column loop.
+!$ACC LOOP GANG VECTOR COLLAPSE(2) &
+!$ACC& PRIVATE(JP1,Z_CO2REG,Z_COMPFP,Z_FACTOR,Z_FP,Z_FT,Z_FT1, &
+!$ACC& Z_PLOG,Z_SCALEFAC,Z_STPFAC,Z_WATER)
+DO JLAY = 1, KLEV
+  DO JLON = KIDIA, KFDIA
+    Z_STPFAC = 296._JPRB/1013._JPRB
+#else
 !$ACC LOOP GANG VECTOR
 DO JLON = KIDIA, KFDIA
   Z_STPFAC = 296._JPRB/1013._JPRB
@@ -96,6 +106,7 @@ DO JLON = KIDIA, KFDIA
   K_LAYLOW(JLON)   = 0
   !$ACC LOOP SEQ
   DO JLAY = 1, KLEV
+#endif
 !        Find the two reference pressures on either side of the
 !        layer pressure.  Store them in JP and JP1.  Store in FP the
 !        fraction of the difference (in ln(pressure)) between these
@@ -143,7 +154,9 @@ DO JLON = KIDIA, KFDIA
 !         IF (PLOG .LE. 4.56) GO TO 5300
 !--------------------------------------         
     IF (Z_PLOG  >  4.56_JPRB) THEN
+#ifndef _OPENACC
       K_LAYTROP(JLON) =  K_LAYTROP(JLON) + 1
+#endif
 !        For one band, the "switch" occurs at ~300 mb. 
 !      IF (Z_PLOG  >=  5.76_JPRB) K_LAYSWTCH(JLON) = K_LAYSWTCH(JLON) + 1
 !      IF (Z_PLOG  >=  6.62_JPRB) K_LAYLOW(JLON) = K_LAYLOW(JLON) + 1
@@ -278,12 +291,26 @@ DO JLON = KIDIA, KFDIA
 
   ENDDO
 
+#ifndef _OPENACC
 ! MT 981104 
 !-- Set LAYLOW for profiles with surface pressure less than 750 hPa. 
   IF (K_LAYLOW(JLON) == 0) K_LAYLOW(JLON)=1
+#endif
 ENDDO
 !$ACC END PARALLEL
 !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#ifdef _OPENACC
+!$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
+DO JLON = KIDIA, KFDIA
+  K_LAYTROP(JLON) = 0
+  K_LAYSWTCH(JLON) = 0
+  K_LAYLOW(JLON) = 1
+  !$ACC LOOP SEQ
+  DO JLAY = 1, KLEV
+    IF (LOG(PAVEL(JLON,JLAY)) > 4.56_JPRB) K_LAYTROP(JLON) = K_LAYTROP(JLON) + 1
+  ENDDO
+ENDDO
+#endif
 
 IF (LHOOK) CALL DR_HOOK('RRTM_SETCOEF_140GP',1,ZHOOK_HANDLE)
 

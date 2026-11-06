@@ -148,7 +148,7 @@ SUBROUTINE INITIALIZE_RANDOM_NUMBERS (KSEED, YD_STREAM)
 
   INTEGER, PARAMETER :: JPMASK=123459876
   INTEGER(KIND=JPIM), PARAMETER     :: JPWARMUP_SHFT=64, JPWARMUP_LFG=999
-  INTEGER(KIND=JPIM)                :: IDUM,JK,JJ,JBIT
+  INTEGER(KIND=JPIM)                :: IDUM,JK,JJ,JBIT,ITOP
   REAL(KIND=JPRB), DIMENSION(JPWARMUP_LFG)   :: ZWARMUP
 
   !-------------------------------------------------------------------------------
@@ -169,11 +169,10 @@ SUBROUTINE INITIALIZE_RANDOM_NUMBERS (KSEED, YD_STREAM)
   IF (IDUM==0) IDUM=JPMASK
 
   DO JJ=1,JPWARMUP_SHFT
-    IF (BTEST(IDUM,31)) THEN
-      IDUM=IBSET(ISHFT(IEOR(IDUM,87),1),0)
-    ELSE
-      IDUM=IBCLR(ISHFT(IDUM,1),0)
-    ENDIF
+    ! A left shift clears bit zero. The original set-bit branch is
+    ! therefore exactly XOR with 2*87+1 after shifting. Keep the same
+    ! bit stream without an unpredictable branch at every shift.
+    IDUM=IEOR(ISHFT(IDUM,1),175_JPIM*IBITS(IDUM,31,1))
   ENDDO
 
   YD_STREAM%IX(1:JPQ-1)= 0
@@ -182,12 +181,9 @@ SUBROUTINE INITIALIZE_RANDOM_NUMBERS (KSEED, YD_STREAM)
 
   DO JBIT=1,JPMM-1
     DO JJ=3,JPQ-1
-      IF (BTEST(IDUM,31)) THEN
-        IDUM=IBSET(ISHFT(IEOR(IDUM,87),1),0)
-        YD_STREAM%IX(JJ)=IBSET(YD_STREAM%IX(JJ),JBIT)
-      ELSE
-        IDUM=IBCLR(ISHFT(IDUM,1),0)
-      ENDIF
+      ITOP=IBITS(IDUM,31,1)
+      IDUM=IEOR(ISHFT(IDUM,1),175_JPIM*ITOP)
+      YD_STREAM%IX(JJ)=IOR(YD_STREAM%IX(JJ),ISHFT(ITOP,JBIT))
     ENDDO
   ENDDO
 

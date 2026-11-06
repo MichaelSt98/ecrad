@@ -85,6 +85,15 @@ I_NLAYERS = KLEV
 !$ACC PARALLEL DEFAULT(NONE) PRESENT(PAVEL, PTAVEL, PCOLDRY, PWKL, KLAYTROP, PCOLCH4, PCOLCO2, PCOLH2O, PCOLMOL, &
 !$ACC   PCOLO2,PCOLO3, PFORFAC, PFORFRAC, KINDFOR, PSELFFAC, PSELFFRAC, KINDSELF, PFAC00, PFAC01, PFAC10, PFAC11, &
 !$ACC   KJP, KJT,KJT1, PRMU0) ASYNC(1)
+#ifdef _OPENACC
+! Layer-parallel coefficients and separate ordered tropopause count, adapted
+! from Michael Staneker's tiled ACC source (475b28a9).
+!$ACC LOOP GANG VECTOR COLLAPSE(2) &
+!$ACC& PRIVATE(Z_PLOG,Z_FP,Z_FT,Z_FT1,Z_WATER,Z_SCALEFAC,Z_FACTOR,Z_CO2REG,Z_COMPFP,JP1)
+DO JK = 1, I_NLAYERS
+  DO JL = KIDIA, KFDIA
+    PCOLMOL(JL,JK) = 0.0_JPRB
+#else
 !$ACC LOOP SEQ
 DO JK = 1, KLEV
   !$ACC LOOP GANG(STATIC:1) VECTOR
@@ -112,6 +121,7 @@ DO JK = 1, I_NLAYERS
   !$ACC LOOP GANG(STATIC:1) VECTOR &
   !$ACC   PRIVATE(Z_PLOG, Z_FP, Z_FT, Z_FT1, Z_WATER, Z_SCALEFAC, Z_FACTOR, Z_CO2REG, Z_COMPFP, JP1)
   DO JL = KIDIA, KFDIA
+#endif
     IF (PRMU0(JL) > 0.0_JPRB) THEN
       !        Find the two reference pressures on either side of the
       !        layer pressure.  Store them in JP and JP1.  Store in FP the
@@ -160,7 +170,7 @@ DO JK = 1, I_NLAYERS
       IF (Z_PLOG <= 4.56_JPRB) GO TO 5300
 #if defined(OMPGPU)
       KLAYTROP_TMP(JL,JK) =  KLAYTROP_TMP(JL,JK) + 1
-#else
+#elif !defined(_OPENACC)
       KLAYTROP(JL) =  KLAYTROP(JL) + 1
 #endif
 
@@ -259,6 +269,19 @@ DO JK = 1, I_NLAYERS
 ENDDO
 !$ACC END PARALLEL
 !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+#ifdef _OPENACC
+! Night columns retain the LW tropopause already supplied by the caller.
+!$ACC PARALLEL LOOP GANG VECTOR DEFAULT(PRESENT) ASYNC(1)
+DO JL = KIDIA, KFDIA
+  IF (PRMU0(JL) > 0.0_JPRB) THEN
+    KLAYTROP(JL) = 0
+    !$ACC LOOP SEQ
+    DO JK = 1, KLEV
+      IF (LOG(PAVEL(JL,JK)) > 4.56_JPRB) KLAYTROP(JL) = KLAYTROP(JL) + 1
+    ENDDO
+  ENDIF
+ENDDO
+#endif
 
 #if defined(OMPGPU)
 !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO

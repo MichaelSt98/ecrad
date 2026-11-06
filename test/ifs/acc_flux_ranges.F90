@@ -23,11 +23,11 @@ contains
     integer :: jcol
     integer :: map_g(4), map_canopy(2)
     real(jprb), target :: direct(4,col_lo:col_hi), diffuse(4,col_lo:col_hi)
-    real(jprb), target :: band_direct(2,col_lo:col_hi), band_total(2,col_lo:col_hi)
+    real(jprb), target :: band_direct(3,col_lo:col_hi), band_total(3,col_lo:col_hi)
     real(jprb), target :: canopy(2,col_lo:col_hi)
     real(jprb) :: lw_band(2,col_lo:col_hi)
     type(flux_type) :: flux
-    real(jprb) :: expected_direct(2,col_lo:col_hi), expected_total(2,col_lo:col_hi)
+    real(jprb) :: expected_direct(3,col_lo:col_hi), expected_total(3,col_lo:col_hi)
     real(jprb) :: expected_canopy(2,col_lo:col_hi)
 
     map_g = [2,1,2,1]
@@ -44,7 +44,8 @@ contains
     expected_total = sentinel
     expected_canopy = sentinel
     do jcol = first,last
-      expected_direct(:,jcol) = real(jcol,jprb)*[6.0_jprb,4.0_jprb]
+      ! Interleaved g-point mapping and a third, empty band.
+      expected_direct(:,jcol) = real(jcol,jprb)*[6.0_jprb,4.0_jprb,0.0_jprb]
       expected_total(:,jcol) = 3.0_jprb*expected_direct(:,jcol)
       expected_canopy(:,jcol) = real(jcol,jprb)*[4.0_jprb,6.0_jprb]
     end do
@@ -55,7 +56,7 @@ contains
     flux%sw_dn_surf_band => band_total
     flux%sw_dn_direct_surf_canopy => canopy
     !$acc data copyin(direct,diffuse,map_g,map_canopy) copy(band_direct,band_total,canopy,lw_band)
-    call sum_surf_band_omp(first,last,4,2,col_lo,col_hi,map_g, &
+    call sum_surf_band_omp(first,last,4,3,col_lo,col_hi,map_g, &
          &  flux%sw_dn_direct_surf_g, flux%sw_dn_diffuse_surf_g, &
          &  flux%sw_dn_direct_surf_band, flux%sw_dn_surf_band)
     call canopy_nearest_gpu(first,last,4,2,2,col_lo,col_hi,map_canopy,map_g, &
@@ -68,7 +69,7 @@ contains
     if (any(band_direct /= expected_direct)) error stop 'Incorrect direct band fluxes'
     if (any(band_total /= expected_total)) error stop 'Incorrect total band fluxes'
     if (any(canopy /= expected_canopy)) error stop 'Incorrect canopy fluxes'
-    if (any(lw_band /= expected_direct)) error stop 'Incorrect longwave band fluxes'
+    if (any(lw_band /= expected_direct(1:2,:))) error stop 'Incorrect longwave band fluxes'
   end subroutine test_case
 
 end program acc_flux_ranges
