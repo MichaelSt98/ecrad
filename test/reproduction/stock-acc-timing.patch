@@ -1,0 +1,26 @@
+diff --git a/driver/ecrad_ifs_driver_blocked.F90 b/driver/ecrad_ifs_driver_blocked.F90
+--- a/driver/ecrad_ifs_driver_blocked.F90
++++ b/driver/ecrad_ifs_driver_blocked.F90
+@@ -76 +76,3 @@
++  use iso_fortran_env, only : perf_int => int64
+   implicit none
++  integer(perf_int) :: perf_count(2), perf_rate
+@@ -399,2 +401,5 @@
+   do jrepeat = 1,driver_config%nrepeat
++    !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(1), perf_rate)
+ #ifdef HAVE_NVTX
+@@ -539 +544,6 @@
+ #endif
++    !$acc wait
++    !$OMP TASKWAIT
++    call system_clock(perf_count(2))
++    write(nulout,'(a,i0,1x,f16.9)') 'PERF_ITER ', jrepeat, &
++         & real(perf_count(2)-perf_count(1),jprd)/real(perf_rate,jprd)
+diff --git a/radiation/CMakeLists.txt b/radiation/CMakeLists.txt
+--- a/radiation/CMakeLists.txt
++++ b/radiation/CMakeLists.txt
+@@ -118 +118 @@
+-if( HAVE_INLIB )
++if( FALSE ) # Benchmark-only: same no-inline-library mode as integration build.

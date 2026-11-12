@@ -1,0 +1,17 @@
+{
+  "description": "Reproduction evidence only; times are seconds per complete 16960-column radiation iteration.",
+  "workload": {"columns": 16960, "levels": 137, "precision": "SP", "gpu": "2 x A100-SXM4-40GB", "cpu": "64 AMD EPYC 7742 physical cores", "input_sha256": "214b418cccfaac72b2f772eb7a8135ac8e8f8a2719fed96764d6caef51d5cb89", "groups": 5, "iterations": 6, "warmup_discarded": 1},
+  "stock_acc": {
+    "job": "38021485", "node": "ac6-301", "compiler": "NVHPC 24.5", "revision": "0614ad1221c579e382872ce6a409fffff5acf8cd",
+    "seconds_by_nproma": {"32": 6.1016898, "128": 2.262604, "1024": 0.6050799, "2048": 0.488015, "4096": 0.4223421, "8192": 0.3862002, "8480": 0.3556168},
+    "repeats": "All 13 saved numeric variables finite and exact across five groups on both ranks for every block size.",
+    "versus_main_gpu": "At large blocks max LW 4.01171875 and SW 2.4433155059814453 W/m2; output differs, and original jobs are separate allocations. PR 122 explains the principal stale gas metadata issue. No equal-output speedup claimed."
+  },
+  "intel_mix": {
+    "job": "38021484", "node": "ac6-301", "compiler": "ifort 2021.10.0, Intel 2023.2", "flags": "-O3 -qopenmp",
+    "baseline": "54fe9cb77abb63adf7f746f0adee449e73291d79", "change": "MIX initializer only from 9e156b8",
+    "cases": {"8": {"base_seconds": 0.606289, "mix_seconds": 0.595734, "runtime_reduction_percent": 1.7409189346994536}, "16": {"base_seconds": 0.625355, "mix_seconds": 0.616134, "runtime_reduction_percent": 1.4745224712363392}, "32": {"base_seconds": 0.640781, "mix_seconds": 0.628767, "runtime_reduction_percent": 1.8748995366591803}},
+    "validation": "All 13 saved numeric variables exact for all five pairs and baseline repeats; exact one-sided paired p=0.03125 at each block size.",
+    "limitation": "Full main-gpu CPU build failed with ifort because an OMP solver uses ALLOCATED on pointer components."
+  }
+}
